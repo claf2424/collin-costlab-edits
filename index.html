@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Costlab Dispensing Cost</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: Costlab formula page, cost breakdown then the new dispensing card; app tokens mirrored from globals.css */
+:root {
+  --canvas: #f5f5f3; --surface: #ffffff; --ink: #1c1917; --text: #44403c; --muted: #78716c; --faint: #a8a29e;
+  --line: #e7e5e4; --line-soft: #f5f5f4; --well: #fafaf9;
+  --brand: #2563eb; --brand-strong: #1d4ed8; --brand-subtle: #eff4ff;
+  --danger: #dc2626; --danger-subtle: #fef2f2; --note: #92400e; --note-bg: #fffbeb; --note-line: #fde68a;
+  --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --canvas: #141210; --surface: #1c1a18; --ink: #f5f5f4; --text: #d6d3d1; --muted: #a8a29e; --faint: #78716c;
+  --line: #2e2b28; --line-soft: #262321; --well: #232120;
+  --brand: #6b9bff; --brand-strong: #8fb3ff; --brand-subtle: #1b2540;
+  --danger: #f87171; --danger-subtle: #3a1d1d; --note: #fcd34d; --note-bg: #2d2412; --note-line: #5c4714;
+  color-scheme: dark } }
+:root[data-theme="dark"] {
+  --canvas: #141210; --surface: #1c1a18; --ink: #f5f5f4; --text: #d6d3d1; --muted: #a8a29e; --faint: #78716c;
+  --line: #2e2b28; --line-soft: #262321; --well: #232120;
+  --brand: #6b9bff; --brand-strong: #8fb3ff; --brand-subtle: #1b2540;
+  --danger: #f87171; --danger-subtle: #3a1d1d; --note: #fcd34d; --note-bg: #2d2412; --note-line: #5c4714;
+  color-scheme: dark }
+* { box-sizing: border-box }
+body { background: var(--canvas); color: var(--ink); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+.wrap { max-width: 1100px; margin: 0 auto; padding-block: 24px 48px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 20px }
+.mono, .num { font-family: var(--mono); font-variant-numeric: tabular-nums }
+.banner { display: flex; gap: 10px; align-items: flex-start; background: var(--note-bg); border: 1px solid var(--note-line); color: var(--note); border-radius: 10px; padding: 10px 14px; font-size: 13px; line-height: 1.45 }
+.banner strong { font-weight: 600 }
+.back { color: var(--muted); font-size: 13px; font-weight: 500 }
+h1 { margin: 4px 0 0; font-size: 24px; font-weight: 600; letter-spacing: -0.01em; text-wrap: balance }
+.sub { color: var(--muted); font-size: 14px; margin-top: 4px }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; box-shadow: 0 1px 2px rgb(0 0 0 / 0.04); min-width: 0 }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px }
+.eyebrow { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 }
+h3 { font-size: 14px; font-weight: 600; color: var(--ink); margin: 0 }
+.hint { font-size: 12px; color: var(--muted); margin: 4px 0 0 }
+.faint { font-size: 12px; color: var(--faint) }
+
+/* Cost breakdown (unchanged, for context) */
+.breakdown { display: grid; gap: 16px; grid-template-columns: minmax(0, 300px) 1fr }
+.dl { display: grid; gap: 6px; font-size: 14px; margin: 8px 0 0 }
+.dl div { display: flex; justify-content: space-between; gap: 12px }
+.dl dt { color: var(--text) } .dl dd { margin: 0; color: var(--ink) }
+.dl .total { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; font-weight: 600 }
+.tbl-wrap { overflow-x: auto; min-width: 0 }
+table { width: 100%; min-width: 480px; border-collapse: collapse; font-size: 14px; text-align: right }
+th { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); padding: 10px 12px; border-bottom: 1px solid var(--line) }
+th:first-child, td:first-child { text-align: left; padding-left: 0 }
+td { padding: 12px; border-bottom: 1px solid var(--line-soft); color: var(--text) }
+td.strong { color: var(--ink); font-weight: 600 }
+th.brand { color: var(--brand) }
+
+/* Dispensing cost */
+.disp { display: grid; gap: 24px; grid-template-columns: 1fr 290px; align-items: start }
+.col { display: grid; gap: 24px; min-width: 0 }
+.block { display: grid; gap: 12px }
+.block + .block { border-top: 1px solid var(--line-soft); padding-top: 20px }
+.row-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px }
+.fields { display: grid; gap: 14px; grid-template-columns: repeat(3, minmax(0, 1fr)) }
+label.f { display: grid; gap: 6px; font-size: 13px; font-weight: 500; color: var(--text) }
+.money { position: relative }
+.money span { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--faint); font-size: 14px; pointer-events: none }
+input, select { width: 100%; font: inherit; font-size: 14px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px; min-height: 38px }
+.money input { padding-left: 24px; font-family: var(--mono) }
+input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; border-color: var(--brand) }
+.profile { display: flex; gap: 10px; align-items: center; flex-wrap: wrap }
+.profile select { width: auto; min-width: 220px; flex: 1 1 220px; max-width: 320px }
+.chip { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; padding: 3px 8px; border-radius: 999px; background: var(--brand-subtle); color: var(--brand) }
+.chip.custom { background: var(--line-soft); color: var(--muted) }
+.lines { display: grid; gap: 8px }
+.line { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 14px }
+.line .name { font-weight: 500; color: var(--ink) }
+.line .meta { font-size: 12px; color: var(--muted); margin-top: 2px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap }
+.qty { width: 64px; min-height: 30px; padding: 4px 8px; font-family: var(--mono); font-size: 13px }
+.line .right { display: flex; align-items: center; gap: 10px; flex-shrink: 0 }
+.empty { border: 1px dashed var(--line); border-radius: 8px; padding: 16px; text-align: center; color: var(--faint); font-size: 14px }
+button { font: inherit; cursor: pointer }
+.btn { background: var(--brand); color: #fff; border: 0; border-radius: 8px; padding: 9px 14px; font-size: 14px; font-weight: 500 }
+.btn:hover { background: var(--brand-strong) }
+.btn-sm { background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 6px 11px; font-size: 13px; font-weight: 500 }
+.btn-sm:hover { background: var(--well) }
+.btn-white { padding: 9px 14px; font-size: 14px }
+.icon-btn { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); color: var(--danger) }
+.icon-btn:hover { background: var(--danger-subtle) }
+.summary { background: var(--well); border-radius: 10px; padding: 18px; position: sticky; top: 16px }
+.big { font-family: var(--mono); font-size: 30px; font-weight: 600; color: var(--ink); margin-top: 4px; font-variant-numeric: tabular-nums }
+.big small { font-family: var(--sans); font-size: 14px; font-weight: 400; color: var(--muted); margin-left: 4px }
+.bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--line); margin: 14px 0 6px }
+.bar i { display: block; height: 100% }
+.seg-prod { background: var(--muted) } .seg-labor { background: var(--brand) } .seg-pack { background: #0d9488 } .seg-over { background: #a16207 }
+.dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-right: 7px }
+.saved { font-size: 13px; color: var(--muted); min-height: 18px }
+.actions-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap }
+
+/* Modal */
+.scrim { position: fixed; inset: 0; background: rgb(12 10 9 / 0.45); display: grid; place-items: center; padding: max(16px, env(safe-area-inset-left, 0px)); z-index: 20 }
+.modal { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; width: min(440px, 100%); padding: 20px; display: grid; gap: 14px; box-shadow: 0 20px 40px rgb(0 0 0 / 0.2) }
+.modal h2 { margin: 0; font-size: 16px; font-weight: 600 }
+.results { display: grid; gap: 4px; max-height: 220px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 4px }
+.result { display: flex; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: 6px; border: 0; background: transparent; color: var(--ink); text-align: left; font-size: 14px }
+.result:hover, .result[aria-selected="true"] { background: var(--brand-subtle) }
+.result .ndc { font-size: 12px; color: var(--muted) }
+.err { color: var(--danger); font-size: 13px; min-height: 0 }
+
+@media (max-width: 860px) { .disp, .breakdown { grid-template-columns: 1fr } .summary { position: static } }
+@media (max-width: 560px) { .fields { grid-template-columns: 1fr 1fr } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="banner" role="note"><strong>Prototype.</strong> Sample data, nothing saves to Costlab or GitHub. Change any value to test the math; the batch cost breakdown is shown only for context and does not change.</div>
+
+  <div>
+    <div class="back">‹ Back to formulas</div>
+    <h1>Semaglutide 2.5 mg/mL Injection</h1>
+    <div class="sub">Edit the formula details, then add components, labor, and testing below.</div>
+  </div>
+
+  <section class="card" aria-labelledby="cb">
+    <div class="card-head"><h2 class="eyebrow" id="cb">Cost breakdown</h2><span class="faint">Unchanged</span></div>
+    <div class="breakdown">
+      <div>
+        <div class="eyebrow" style="font-size:11px">Components by type</div>
+        <dl class="dl">
+          <div><dt>Ingredients</dt><dd class="num">$0.00</dd></div>
+          <div><dt>Compound ingredients</dt><dd class="num">$33.38</dd></div>
+          <div><dt>Labels, vials and lids</dt><dd class="num">$102.00</dd></div>
+          <div><dt>Pharmacy supplies</dt><dd class="num">$6.60</dd></div>
+          <div class="total"><dt>Materials</dt><dd class="num">$141.98</dd></div>
+        </dl>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th></th><th>Materials</th><th>Labor</th><th>Testing</th><th class="brand">All-in cost</th></tr></thead>
+          <tbody>
+            <tr><td>Per batch</td><td class="num">$141.98</td><td class="num">$30.10</td><td class="num">$478.00</td><td class="num strong">$650.08</td></tr>
+            <tr><td>Per saleable unit</td><td class="num">$1.42</td><td class="num">$0.30</td><td class="num">$4.78</td><td class="num strong">$6.50</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="dc">
+    <div class="card-head">
+      <h2 class="eyebrow" id="dc">Dispensing cost (per order)</h2>
+      <div class="actions-row"><span class="saved" id="saved" aria-live="polite"></span><button class="btn-sm btn-white" id="saveTpl">Save as template</button><button class="btn" id="save">Save dispensing cost</button></div>
+    </div>
+
+    <div class="disp">
+      <div class="col">
+        <div class="block">
+          <div>
+            <h3>Dispensing cost templates</h3>
+            <p class="hint">Pick a template to fill in the values below. Editing a value after that sets this back to None.</p>
+          </div>
+          <div class="profile">
+            <select id="profile" aria-label="Dispensing cost template"></select>
+            <span class="chip" id="profileChip" hidden>Template</span>
+          </div>
+        </div>
+
+        <div class="block">
+          <h3>Labor</h3>
+          <div class="fields">
+            <label class="f" for="filling">Filling<div class="money"><span>$</span><input id="filling" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00"></div></label>
+            <label class="f" for="pv">PV<div class="money"><span>$</span><input id="pv" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00"></div></label>
+            <label class="f" for="shipping">Shipping<div class="money"><span>$</span><input id="shipping" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00"></div></label>
+          </div>
+        </div>
+
+        <div class="block">
+          <div class="row-head"><h3>Packaging &amp; material</h3><span class="num" id="packTotal">$0.00</span></div>
+          <div class="lines" id="lines"></div>
+          <div><button class="btn-sm" id="addBtn">Add packaging</button></div>
+        </div>
+
+        <div class="block">
+          <div>
+            <h3>Overhead</h3>
+            <p class="hint">Flat amount applied to every order.</p>
+          </div>
+          <div class="fields">
+            <label class="f" for="overhead">Overhead per order<div class="money"><span>$</span><input id="overhead" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00"></div></label>
+          </div>
+        </div>
+      </div>
+
+      <aside class="summary" aria-label="Total dispensing cost">
+        <div class="eyebrow" style="font-size:11px">Total dispensing cost</div>
+        <div class="big" id="total">$0.00<small>per order</small></div>
+        <div class="bar" aria-hidden="true"><i class="seg-prod" id="segR"></i><i class="seg-labor" id="segL"></i><i class="seg-pack" id="segP"></i><i class="seg-over" id="segO"></i></div>
+        <dl class="dl">
+          <div><dt><span class="dot seg-prod"></span>Product</dt><dd class="num" id="sumR">$6.50</dd></div>
+          <div><dt><span class="dot seg-labor"></span>Labor</dt><dd class="num" id="sumL">$0.00</dd></div>
+          <div><dt><span class="dot seg-pack"></span>Packaging</dt><dd class="num" id="sumP">$0.00</dd></div>
+          <div><dt><span class="dot seg-over"></span>Overhead</dt><dd class="num" id="sumO">$0.00</dd></div>
+        </dl>
+        <p class="faint" style="margin:14px 0 0;line-height:1.45">Product is the $6.50 all-in cost per saleable unit from the cost breakdown. Labor, packaging and overhead are per order and are not part of the batch cost breakdown.</p>
+      </aside>
+    </div>
+  </section>
+</div>
+
+<div class="scrim" id="scrim" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mtitle">
+    <div><h2 id="mtitle">Add packaging</h2><p class="hint">Attach a library component and how many go out with each order.</p></div>
+    <label class="f" for="search">Component<input id="search" type="text" placeholder="Search by name or NDC/SKU…" autocomplete="off"></label>
+    <div class="results" id="results" role="listbox" aria-label="Components"></div>
+    <label class="f" for="mqty">Quantity per order<input id="mqty" type="number" min="0.0001" step="0.0001" value="1"></label>
+    <div class="err" id="merr"></div>
+    <div class="actions-row" style="justify-content:flex-end"><button class="btn-sm" id="cancel">Cancel</button><button class="btn" id="confirm">Add</button></div>
+  </div>
+</div>
+
+<div class="scrim" id="tplScrim" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ttitle">
+    <div><h2 id="ttitle">Save as template</h2><p class="hint">Saves this labor, packaging and overhead so you can reuse it on other formulas.</p></div>
+    <label class="f" for="tplName">Template name<input id="tplName" type="text" placeholder="e.g. Standard CC Dispense" autocomplete="off"></label>
+    <div class="err" id="terr"></div>
+    <div class="actions-row" style="justify-content:flex-end"><button class="btn-sm" id="tplCancel">Cancel</button><button class="btn" id="tplConfirm">Save template</button></div>
+  </div>
+</div>
+
+<script>
+// Sample component library (shipping supplies), unit cost in cents at the preferred manufacturer.
+const LIBRARY = [
+  { id: "c1", name: "Xpander Pack", sku: "XP-1012 · Uline", cents: 85 },
+  { id: "c2", name: "Ice Pack 6 oz", sku: "IP-6OZ · Polar Tech", cents: 42 },
+  { id: "c3", name: "Insulated Shipper 8x6x6", sku: "IS-866 · Uline", cents: 310 },
+  { id: "c4", name: "Bubble Mailer #0", sku: "BM-0 · Uline", cents: 35 },
+  { id: "c5", name: "Patient Info Insert", sku: "PI-STD · In-house", cents: 6 },
+  { id: "c6", name: "Tamper Seal Label", sku: "TS-100 · Medline", cents: 4 },
+  { id: "c7", name: "Sharps Container 1 qt", sku: "SC-1Q · BD", cents: 128 },
+];
+const byId = Object.fromEntries(LIBRARY.map(c => [c.id, c]));
+
+// Proposed reusable dispense profiles ("Standard CC Dispense" from the sketch).
+const PROFILES = [
+  { id: "std-cc", name: "Standard CC Dispense", filling: 1.25, pv: 1.50, shipping: 0.75, overhead: 0.50, items: [["c1", 1], ["c2", 4]] },
+  { id: "cold-ovn", name: "Cold Chain Overnight", filling: 1.25, pv: 1.50, shipping: 1.50, overhead: 0.75, items: [["c3", 1], ["c2", 6], ["c5", 1]] },
+  { id: "ambient", name: "Ambient Mailer", filling: 1.00, pv: 1.50, shipping: 0.50, overhead: 0.40, items: [["c4", 1], ["c5", 1], ["c6", 1]] },
+];
+
+const $ = id => document.getElementById(id);
+const fmt = cents => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format((cents || 0) / 100);
+const pos = v => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0; };
+
+const PRODUCT_CENTS = 650; // all-in cost per saleable unit, from the cost breakdown
+let state = { profile: "none", filling: 0, pv: 0, shipping: 0, overhead: 0, items: [] };
+let dirty = false;
+
+function applyProfile(p) {
+  state = { profile: p.id, filling: p.filling, pv: p.pv, shipping: p.shipping, overhead: p.overhead,
+    items: p.items.map(([cid, q], i) => ({ key: cid + i + Date.now(), cid, qty: q })) };
+  ["filling", "pv", "shipping", "overhead"].forEach(k => $(k).value = state[k] ? state[k].toFixed(2) : "");
+}
+
+function goCustom() {
+  if (state.profile !== "none") { state.profile = "none"; $("profile").value = "none"; }
+  dirty = true; $("saved").textContent = "Unsaved changes";
+}
+
+function calc() {
+  const labor = (pos(state.filling) + pos(state.pv) + pos(state.shipping)) * 100;
+  const pack = state.items.reduce((s, it) => s + pos(it.qty) * byId[it.cid].cents, 0);
+  const over = pos(state.overhead) * 100;
+  return { prod: PRODUCT_CENTS, labor, pack, over, total: PRODUCT_CENTS + labor + pack + over };
+}
+
+function renderLines() {
+  const box = $("lines");
+  box.innerHTML = "";
+  if (!state.items.length) { box.innerHTML = '<div class="empty">None added.</div>'; return; }
+  state.items.forEach(it => {
+    const c = byId[it.cid];
+    const row = document.createElement("div");
+    row.className = "line";
+    row.innerHTML = `<div style="min-width:0"><div class="name"></div><div class="meta"><input class="qty" type="number" min="0" step="1" aria-label="Quantity per order"> per order @ <span class="mono">${fmt(c.cents)}</span> each</div></div>
+      <div class="right"><span class="num cost"></span><button class="icon-btn" aria-label="Remove" title="Remove"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg></button></div>`;
+    row.querySelector(".name").textContent = c.name;
+    const q = row.querySelector(".qty");
+    q.id = "qty-" + it.key; q.value = it.qty;
+    const cost = row.querySelector(".cost");
+    cost.textContent = fmt(pos(it.qty) * c.cents);
+    q.addEventListener("input", () => { it.qty = q.value; cost.textContent = fmt(pos(it.qty) * c.cents); goCustom(); renderTotals(); });
+    row.querySelector(".icon-btn").addEventListener("click", () => { state.items = state.items.filter(x => x !== it); goCustom(); render(); });
+    box.appendChild(row);
+  });
+}
+
+function renderTotals() {
+  const r = calc();
+  $("total").innerHTML = fmt(r.total) + "<small>per order</small>";
+  $("sumL").textContent = fmt(r.labor); $("sumP").textContent = fmt(r.pack); $("sumO").textContent = fmt(r.over);
+  $("packTotal").textContent = fmt(r.pack);
+  const t = r.total || 1;
+  $("segR").style.width = (r.prod / t * 100) + "%";
+  $("segL").style.width = (r.labor / t * 100) + "%"; $("segP").style.width = (r.pack / t * 100) + "%"; $("segO").style.width = (r.over / t * 100) + "%";
+  $("profileChip").hidden = state.profile === "none";
+}
+
+function render() { renderLines(); renderTotals(); }
+
+// Profile select
+const sel = $("profile");
+function renderOptions() {
+  sel.innerHTML = "";
+  sel.add(new Option("None", "none"));
+  PROFILES.forEach(p => sel.add(new Option(p.name, p.id)));
+  sel.value = state.profile;
+}
+renderOptions();
+sel.addEventListener("change", () => {
+  if (sel.value === "none") { state.profile = "none"; renderTotals(); return; }
+  applyProfile(PROFILES.find(p => p.id === sel.value)); dirty = true; $("saved").textContent = "Unsaved changes"; render();
+});
+
+["filling", "pv", "shipping", "overhead"].forEach(k => $(k).addEventListener("input", e => { state[k] = e.target.value; goCustom(); renderTotals(); }));
+
+$("save").addEventListener("click", () => {
+  const bad = ["filling", "pv", "shipping", "overhead"].find(k => Number($(k).value) < 0);
+  if (bad) { $("saved").textContent = "Amounts can't be negative."; $(bad).focus(); return; }
+  dirty = false; $("saved").textContent = "Saved (prototype only)";
+});
+
+// Add packaging modal
+let picked = null;
+function renderResults() {
+  const terms = $("search").value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const list = LIBRARY.filter(c => terms.every(t => (c.name + " " + c.sku).toLowerCase().includes(t)));
+  const box = $("results"); box.innerHTML = "";
+  if (!list.length) { box.innerHTML = '<div class="faint" style="padding:8px 10px">No components match.</div>'; return; }
+  list.forEach(c => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "result"; b.setAttribute("role", "option");
+    b.setAttribute("aria-selected", picked === c.id ? "true" : "false");
+    b.innerHTML = `<span><span class="nm"></span><br><span class="ndc"></span></span><span class="mono">${fmt(c.cents)}</span>`;
+    b.querySelector(".nm").textContent = c.name; b.querySelector(".ndc").textContent = c.sku;
+    b.addEventListener("click", () => { picked = c.id; $("merr").textContent = ""; renderResults(); });
+    box.appendChild(b);
+  });
+}
+function openModal() { picked = null; $("search").value = ""; $("mqty").value = "1"; $("merr").textContent = ""; renderResults(); $("scrim").hidden = false; $("search").focus(); }
+function closeModal() { $("scrim").hidden = true; $("addBtn").focus(); }
+$("addBtn").addEventListener("click", openModal);
+$("cancel").addEventListener("click", closeModal);
+$("scrim").addEventListener("click", e => { if (e.target === $("scrim")) closeModal(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("scrim").hidden) closeModal(); });
+$("search").addEventListener("input", renderResults);
+$("confirm").addEventListener("click", () => {
+  if (!picked) { $("merr").textContent = "Pick a component from the list."; return; }
+  const q = Number($("mqty").value);
+  if (!(q > 0)) { $("merr").textContent = "Quantity must be greater than 0."; return; }
+  state.items.push({ key: picked + Date.now(), cid: picked, qty: q });
+  goCustom(); closeModal(); render();
+});
+
+// Save as template
+function openTpl() { $("tplName").value = ""; $("terr").textContent = ""; $("tplScrim").hidden = false; $("tplName").focus(); }
+function closeTpl() { $("tplScrim").hidden = true; $("saveTpl").focus(); }
+$("saveTpl").addEventListener("click", openTpl);
+$("tplCancel").addEventListener("click", closeTpl);
+$("tplScrim").addEventListener("click", e => { if (e.target === $("tplScrim")) closeTpl(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("tplScrim").hidden) closeTpl(); });
+$("tplName").addEventListener("keydown", e => { if (e.key === "Enter") $("tplConfirm").click(); });
+$("tplConfirm").addEventListener("click", () => {
+  const name = $("tplName").value.trim();
+  if (!name) { $("terr").textContent = "Enter a name for the template."; return; }
+  if (PROFILES.some(p => p.name.toLowerCase() === name.toLowerCase())) { $("terr").textContent = "A template with this name already exists. Pick another name."; return; }
+  const tpl = { id: "t" + Date.now(), name, filling: pos(state.filling), pv: pos(state.pv), shipping: pos(state.shipping), overhead: pos(state.overhead),
+    items: state.items.map(it => [it.cid, pos(it.qty)]) };
+  PROFILES.push(tpl);
+  state.profile = tpl.id;
+  renderOptions(); renderTotals(); closeTpl();
+  $("saved").textContent = "Saved template \u201c" + name + "\u201d";
+});
+
+render();
+</script>
+
+</body>
+</html>

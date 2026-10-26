@@ -1,0 +1,706 @@
+From 8b18267845aa37de1060bf565058e1f436547e73 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 23 Oct 2026 13:25:10 -0400
+Subject: [PATCH] Add dispensing cost per order to the master formula
+
+Labor (filling, PV, shipping), packaging and material per order from the
+component library, and overhead, with a per-order total. Kept separate from
+the batch cost breakdown and all-in cost.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01GrHDaDzXtzpCcCEdGPjcfA
+---
+ src/app/(app)/formulas/[id]/page.tsx          | 212 +++++++++++++++++-
+ src/app/actions.ts                            | 121 ++++++++++
+ src/lib/data.ts                               |  12 +-
+ src/lib/dispensing-cost.ts                    |  42 ++++
+ src/lib/types.ts                              |  14 ++
+ .../0025_formula_dispensing_cost.sql          |  98 ++++++++
+ tests/dispensing-cost.test.ts                 |  44 ++++
+ 7 files changed, 539 insertions(+), 4 deletions(-)
+ create mode 100644 src/lib/dispensing-cost.ts
+ create mode 100644 supabase/migrations/0025_formula_dispensing_cost.sql
+ create mode 100644 tests/dispensing-cost.test.ts
+
+diff --git a/src/app/(app)/formulas/[id]/page.tsx b/src/app/(app)/formulas/[id]/page.tsx
+index 722af14..236d58c 100644
+--- a/src/app/(app)/formulas/[id]/page.tsx
++++ b/src/app/(app)/formulas/[id]/page.tsx
+@@ -2,14 +2,17 @@ import Link from "next/link";
+ import { ChevronDown, ChevronLeft, Copy, FileDown, Trash2 } from "lucide-react";
+ import {
+   addFormulaComponent,
++  addFormulaDispensingItem,
+   addFormulaLabor,
+   addFormulaTest,
+   deleteFormulaComponent,
++  deleteFormulaDispensingItem,
+   deleteFormulaLabor,
+   deleteFormulaTest,
+   duplicateFormula,
+   setFormulaComponentManufacturer,
+   updateFormula,
++  updateFormulaDispensingCost,
+ } from "@/app/actions";
+ import { ActionSafeSelect } from "@/components/action-safe-select";
+ import { AddDispensingFormButton } from "@/components/add-dispensing-form-button";
+@@ -36,8 +39,16 @@ import { preferredManufacturer, selectableManufacturers } from "@/lib/component-
+ import type { ComponentTypeRecord } from "@/lib/component-types";
+ import { calculateLibraryFormulaCost, resolveComponentPrice } from "@/lib/costing";
+ import { getFormulaDetailData } from "@/lib/data";
++import { calculateDispensingCost } from "@/lib/dispensing-cost";
+ import { cn, formatMoney } from "@/lib/utils";
+-import type { Component, DispensingForm, FormulaComponent, UnitMeasure } from "@/lib/types";
++import type {
++  Component,
++  DispensingForm,
++  Formula,
++  FormulaComponent,
++  FormulaDispensingItem,
++  UnitMeasure,
++} from "@/lib/types";
+ 
+ /** How a formula line and a library component are placed into a Type group. */
+ const lineTypeRef = (item: FormulaComponent) => ({
+@@ -244,10 +255,198 @@ function ComponentSection({
+   );
+ }
+ 
++/** Cents as a dollar input value: 150 → "1.50", 0 → "" (blank reads as $0). */
++function dollarsValue(cents: number | string | null | undefined) {
++  const n = Number(cents ?? 0);
++  return Number.isFinite(n) && n > 0 ? String(Number((n / 100).toFixed(4))) : "";
++}
++
++function DollarField({ label, name, cents }: { label: string; name: string; cents: number | string | null | undefined }) {
++  return (
++    <Field label={label}>
++      <div className="relative">
++        <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-stone-400">$</span>
++        <input
++          className={cn(inputClass, "pl-6 font-mono")}
++          name={name}
++          type="number"
++          min="0"
++          step="0.01"
++          inputMode="decimal"
++          defaultValue={dollarsValue(cents)}
++          placeholder="0.00"
++        />
++      </div>
++    </Field>
++  );
++}
++
++/**
++ * Dispensing cost per order: labor, packaging and overhead to dispense one
++ * order. Shown on its own and never added to the batch cost breakdown; it is
++ * carried to the quote side as a separate figure.
++ */
++function DispensingCostSection({
++  formula,
++  items,
++  components,
++  ready,
++}: {
++  formula: Formula;
++  items: FormulaDispensingItem[];
++  components: Component[];
++  ready: boolean;
++}) {
++  const unitCost = (item: FormulaDispensingItem) => resolveComponentPrice(item.components, null).unitCostCents;
++  const lineCost = (item: FormulaDispensingItem) => Number(item.quantity) * unitCost(item);
++  const cost = calculateDispensingCost({
++    fillingCents: Number(formula.dispense_filling_cents ?? 0),
++    pvCents: Number(formula.dispense_pv_cents ?? 0),
++    shippingCents: Number(formula.dispense_shipping_cents ?? 0),
++    overheadCents: Number(formula.dispense_overhead_cents ?? 0),
++    packaging: items.map((item) => ({ quantity: Number(item.quantity), unitCostCents: unitCost(item) })),
++  });
++
++  if (!ready) {
++    return (
++      <Section title="Dispensing cost (per order)">
++        <p className="text-sm text-stone-500">
++          Dispensing cost isn&apos;t available yet. Run the latest database migration to enable it.
++        </p>
++      </Section>
++    );
++  }
++
++  return (
++    <Section
++      title="Dispensing cost (per order)"
++      actions={
++        <button type="submit" form="formula-dispensing-form" className={smallButtonClass}>
++          Save dispensing cost
++        </button>
++      }
++    >
++      <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
++        <div className="grid gap-6">
++          <DetailsForm id="formula-dispensing-form" action={updateFormulaDispensingCost} className="grid gap-6">
++            <input type="hidden" name="id" value={formula.id} />
++            <div>
++              <h3 className="mb-3 text-sm font-semibold text-stone-800">Labor</h3>
++              <div className="grid gap-4 sm:grid-cols-3">
++                <DollarField label="Filling" name="filling_dollars" cents={formula.dispense_filling_cents} />
++                <DollarField label="PV" name="pv_dollars" cents={formula.dispense_pv_cents} />
++                <DollarField label="Shipping" name="shipping_dollars" cents={formula.dispense_shipping_cents} />
++              </div>
++            </div>
++            <div>
++              <h3 className="text-sm font-semibold text-stone-800">Overhead</h3>
++              <p className="mb-3 mt-1 text-xs text-stone-500">Flat amount applied to every order.</p>
++              <div className="grid gap-4 sm:grid-cols-3">
++                <DollarField label="Overhead per order" name="overhead_dollars" cents={formula.dispense_overhead_cents} />
++              </div>
++            </div>
++          </DetailsForm>
++
++          <div className="grid gap-3 border-t border-stone-100 pt-5">
++            <div className="flex items-center justify-between">
++              <h3 className="text-sm font-semibold text-stone-800">Packaging &amp; material</h3>
++              <span className="font-mono text-sm font-medium text-stone-700">{formatMoney(cost.packagingCents)}</span>
++            </div>
++            <div className="grid gap-2">
++              {items.map((item) => (
++                <div
++                  key={item.id}
++                  className="flex items-center justify-between gap-3 rounded-lg border border-stone-200/80 px-3.5 py-3 text-sm"
++                >
++                  <div className="min-w-0">
++                    <div className="font-medium text-stone-900">{item.components?.name}</div>
++                    <div className="mt-0.5 font-mono text-xs text-stone-500">
++                      {Number(item.quantity)} per order @ {formatMoney(unitCost(item))} each
++                    </div>
++                  </div>
++                  <div className="flex flex-shrink-0 items-center gap-3">
++                    <span className="font-mono text-stone-900">{formatMoney(lineCost(item))}</span>
++                    <form action={deleteFormulaDispensingItem}>
++                      <input type="hidden" name="formula_id" value={formula.id} />
++                      <input type="hidden" name="id" value={item.id} />
++                      <button className={dangerIconButtonClass} aria-label="Remove" title="Remove">
++                        <Trash2 className="h-3.5 w-3.5" />
++                      </button>
++                    </form>
++                  </div>
++                </div>
++              ))}
++              {items.length === 0 ? (
++                <div className="rounded-lg border border-dashed border-stone-200 py-4 text-center text-sm text-stone-400">
++                  None added.
++                </div>
++              ) : null}
++            </div>
++            <div>
++              <CreateModal
++                title="Add packaging"
++                triggerLabel="Add packaging"
++                description="Attach a library component and how many go out with each order."
++                triggerClassName={smallButtonClass}
++                allowOverflow
++              >
++                <form action={addFormulaDispensingItem} className="grid gap-3">
++                  <input type="hidden" name="formula_id" value={formula.id} />
++                  <Field label="Component" required>
++                    <ComponentPicker name="component_id" components={components} />
++                  </Field>
++                  <Field label="Quantity per order" required>
++                    <input className={inputClass} name="quantity" type="number" min="0.0001" step="0.0001" required />
++                  </Field>
++                  <button className={buttonClass}>Add</button>
++                </form>
++              </CreateModal>
++            </div>
++          </div>
++        </div>
++
++        <div className="h-fit rounded-lg bg-stone-50 p-4">
++          <div className="text-xs font-semibold uppercase tracking-wider text-stone-500">Total dispensing cost</div>
++          <div className="mt-1 font-mono text-2xl font-semibold text-stone-900">
++            {formatMoney(cost.totalCents)}
++            <span className="ml-1 text-sm font-normal text-stone-500">per order</span>
++          </div>
++          <dl className="mt-3 grid gap-1.5 text-sm">
++            <div className="flex justify-between gap-3">
++              <dt className="text-stone-600">Labor</dt>
++              <dd className="font-mono text-stone-800">{formatMoney(cost.laborCents)}</dd>
++            </div>
++            <div className="flex justify-between gap-3">
++              <dt className="text-stone-600">Packaging</dt>
++              <dd className="font-mono text-stone-800">{formatMoney(cost.packagingCents)}</dd>
++            </div>
++            <div className="flex justify-between gap-3">
++              <dt className="text-stone-600">Overhead</dt>
++              <dd className="font-mono text-stone-800">{formatMoney(cost.overheadCents)}</dd>
++            </div>
++          </dl>
++          <p className="mt-3 text-xs text-stone-400">
++            Per order, on top of the product cost. Not included in the batch cost breakdown above.
++          </p>
++        </div>
++      </div>
++    </Section>
++  );
++}
++
+ export default async function FormulaDetailPage({ params }: { params: Promise<{ id: string }> }) {
+   const { id } = await params;
+-  const { formula, components, laborRoles, labTests, units, dispensingForms, componentTypes } =
+-    await getFormulaDetailData(id);
++  const {
++    formula,
++    components,
++    laborRoles,
++    labTests,
++    units,
++    dispensingForms,
++    componentTypes,
++    dispensingItems,
++    dispensingCostReady,
++  } = await getFormulaDetailData(id);
+   const formulaComponents = formula.formula_components ?? [];
+   // One section per Type this pharmacy uses: the three familiar defaults always,
+   // then its own Types, then anything not yet assigned. Every line appears once.
+@@ -553,6 +752,13 @@ export default async function FormulaDetailPage({ params }: { params: Promise<{
+             </div>
+           </div>
+         </Section>
++
++        <DispensingCostSection
++          formula={formula}
++          items={dispensingItems}
++          components={components}
++          ready={dispensingCostReady}
++        />
+       </div>
+     </div>
+   );
+diff --git a/src/app/actions.ts b/src/app/actions.ts
+index c64b54e..761a899 100644
+--- a/src/app/actions.ts
++++ b/src/app/actions.ts
+@@ -666,6 +666,95 @@ export async function updateFormula(
+   return { ok: true, nonce: crypto.randomUUID() };
+ }
+ 
++export async function updateFormulaDispensingCost(
++  _prevState: ComponentFormState,
++  formData: FormData,
++): Promise<ComponentFormState> {
++  const { supabase, organization } = await requireOrganization();
++  const idResult = z.string().uuid().safeParse(text(formData, "id"));
++  if (!idResult.success) return { error: "Could not find this formula." };
++  const id = idResult.data;
++
++  // Dollars in, cents stored. Blank means $0.
++  const dollars = z.number({ error: "Enter a dollar amount." }).finite().nonnegative("Amounts can't be negative.");
++  const read = (key: string) => {
++    const raw = text(formData, key);
++    return raw === "" ? 0 : Number(raw);
++  };
++  const parsed = z
++    .object({
++      filling: dollars,
++      pv: dollars,
++      shipping: dollars,
++      overhead: dollars,
++    })
++    .safeParse({
++      filling: read("filling_dollars"),
++      pv: read("pv_dollars"),
++      shipping: read("shipping_dollars"),
++      overhead: read("overhead_dollars"),
++    });
++  if (!parsed.success) return formError(parsed.error, "Please check the amounts and try again.");
++  const input = {
++    dispense_filling_cents: Math.round(parsed.data.filling * 10000) / 100,
++    dispense_pv_cents: Math.round(parsed.data.pv * 10000) / 100,
++    dispense_shipping_cents: Math.round(parsed.data.shipping * 10000) / 100,
++    dispense_overhead_cents: Math.round(parsed.data.overhead * 10000) / 100,
++  };
++
++  // Per-order dispensing cost never feeds batch costs, so no batch recompute.
++  const { error } = await supabase
++    .from("formulas")
++    .update(input)
++    .eq("id", id)
++    .eq("organization_id", organization.id);
++  if (error) return { error: "Could not save the dispensing cost. Please try again." };
++
++  await audit("formula.dispensing_cost.updated", "formula", id, input);
++  revalidatePath(`/formulas/${id}`);
++  return { ok: true, nonce: crypto.randomUUID() };
++}
++
++export async function addFormulaDispensingItem(formData: FormData) {
++  const { supabase, organization } = await requireOrganization();
++  const input = z
++    .object({
++      formula_id: z.string().uuid(),
++      component_id: z.string().uuid(),
++      quantity: z.number().positive(),
++    })
++    .parse({
++      formula_id: text(formData, "formula_id"),
++      component_id: text(formData, "component_id"),
++      quantity: numberValue(formData, "quantity"),
++    });
++
++  const { data, error } = await supabase
++    .from("formula_dispensing_items")
++    .insert({ ...input, organization_id: organization.id })
++    .select("id")
++    .single();
++  if (error) throw error;
++  await audit("formula.dispensing_item.added", "formula_dispensing_item", data.id, input);
++  revalidatePath(`/formulas/${input.formula_id}`);
++}
++
++export async function deleteFormulaDispensingItem(formData: FormData) {
++  const { supabase, organization } = await requireOrganization();
++  const input = z
++    .object({ formula_id: z.string().uuid(), id: z.string().uuid() })
++    .parse({ formula_id: text(formData, "formula_id"), id: text(formData, "id") });
++  const { error } = await supabase
++    .from("formula_dispensing_items")
++    .delete()
++    .eq("organization_id", organization.id)
++    .eq("formula_id", input.formula_id)
++    .eq("id", input.id);
++  if (error) throw error;
++  await audit("formula.dispensing_item.deleted", "formula_dispensing_item", input.id);
++  revalidatePath(`/formulas/${input.formula_id}`);
++}
++
+ export async function deleteFormula(formData: FormData) {
+   const { supabase, organization } = await requireOrganization();
+   const id = text(formData, "id");
+@@ -753,6 +842,24 @@ export async function duplicateFormula(formData: FormData) {
+     if (tErr) throw tErr;
+   }
+ 
++  // Packaging per order. Read on its own so a database without 0025 still duplicates.
++  const { data: dispensingItems } = await supabase
++    .from("formula_dispensing_items")
++    .select("component_id, quantity")
++    .eq("organization_id", organization.id)
++    .eq("formula_id", id);
++  if (dispensingItems?.length) {
++    const { error: dErr } = await supabase.from("formula_dispensing_items").insert(
++      dispensingItems.map((item: { component_id: string; quantity: number | string }) => ({
++        organization_id: organization.id,
++        formula_id: copy.id,
++        component_id: item.component_id,
++        quantity: item.quantity,
++      })),
++    );
++    if (dErr) throw dErr;
++  }
++
+   await audit("formula.duplicated", "formula", copy.id, { sourceId: id, name });
+   revalidatePath("/formulas");
+   revalidatePath("/dashboard");
+@@ -1373,6 +1480,20 @@ export async function deleteComponent(id: string): Promise<{ error?: string }> {
+     };
+   }
+ 
++  // Or as packaging on a formula's dispensing cost (on delete restrict).
++  const { count: dispensingCount, error: dispensingUsageError } = await supabase
++    .from("formula_dispensing_items")
++    .select("id", { count: "exact", head: true })
++    .eq("organization_id", organization.id)
++    .eq("component_id", componentId);
++  // Tolerate a database without 0025: there is nothing to block on.
++  if (!dispensingUsageError && (dispensingCount ?? 0) > 0) {
++    return {
++      error:
++        "This component is used as dispensing packaging on one or more formulas. Remove it there before deleting it.",
++    };
++  }
++
+   // It can also be referenced by a batch's recipe lines (on delete restrict).
+   const { count: batchCount, error: batchUsageError } = await supabase
+     .from("batch_components")
+diff --git a/src/lib/data.ts b/src/lib/data.ts
+index 0f8f528..8307c55 100644
+--- a/src/lib/data.ts
++++ b/src/lib/data.ts
+@@ -23,6 +23,7 @@ import type {
+   Component,
+   DispensingForm,
+   Formula,
++  FormulaDispensingItem,
+   InventoryItem,
+   InventoryLot,
+   LabTest,
+@@ -306,7 +307,7 @@ export async function getTestingLibraryData() {
+ 
+ export async function getFormulaDetailData(formulaId: string) {
+   const { supabase, organization } = await requireOrganization();
+-  const [formula, components, laborRoles, labTests, units, dispensingForms, componentTypes] =
++  const [formula, components, laborRoles, labTests, units, dispensingForms, componentTypes, dispensingItems] =
+     await Promise.all([
+     supabase
+       .from("formulas")
+@@ -343,6 +344,12 @@ export async function getFormulaDetailData(formulaId: string) {
+       .eq("organization_id", organization.id)
+       .order("name"),
+     getComponentTypeCatalog(),
++    supabase
++      .from("formula_dispensing_items")
++      .select(`*, components(*, ${MANUFACTURERS_SELECT})`)
++      .eq("organization_id", organization.id)
++      .eq("formula_id", formulaId)
++      .order("created_at"),
+   ]);
+ 
+   if (formula.error) throw formula.error;
+@@ -365,6 +372,9 @@ export async function getFormulaDetailData(formulaId: string) {
+     units: withDefaultUnits((units.data ?? []) as UnitMeasure[]),
+     dispensingForms: withDefaultDispensingForms(customForms),
+     componentTypes,
++    // Like dispensing forms: render (with no packaging lines) if 0025 isn't migrated yet.
++    dispensingItems: dispensingItems.error ? [] : ((dispensingItems.data ?? []) as FormulaDispensingItem[]),
++    dispensingCostReady: !dispensingItems.error,
+   };
+ }
+ 
+diff --git a/src/lib/dispensing-cost.ts b/src/lib/dispensing-cost.ts
+new file mode 100644
+index 0000000..d6f241f
+--- /dev/null
++++ b/src/lib/dispensing-cost.ts
+@@ -0,0 +1,42 @@
++/**
++ * Dispensing cost per order: what it costs to dispense one order of a master
++ * formula, on top of (and never mixed into) the cost of making the batch.
++ * Kept free of server-only imports so it can be tested and reused on the
++ * quote side.
++ */
++
++export type DispensingCostInput = {
++  fillingCents: number;
++  pvCents: number;
++  shippingCents: number;
++  overheadCents: number;
++  /** Packaging and material per order: quantity x unit cost. */
++  packaging: { quantity: number; unitCostCents: number }[];
++};
++
++export type DispensingCost = {
++  laborCents: number;
++  packagingCents: number;
++  overheadCents: number;
++  totalCents: number;
++};
++
++const money = (value: unknown) => {
++  const n = Number(value ?? 0);
++  return Number.isFinite(n) && n > 0 ? n : 0;
++};
++
++export function calculateDispensingCost(input: DispensingCostInput): DispensingCost {
++  const laborCents = money(input.fillingCents) + money(input.pvCents) + money(input.shippingCents);
++  const packagingCents = input.packaging.reduce(
++    (sum, line) => sum + money(line.quantity) * money(line.unitCostCents),
++    0,
++  );
++  const overheadCents = money(input.overheadCents);
++  return {
++    laborCents,
++    packagingCents,
++    overheadCents,
++    totalCents: laborCents + packagingCents + overheadCents,
++  };
++}
+diff --git a/src/lib/types.ts b/src/lib/types.ts
+index 3f503c4..5754ca1 100644
+--- a/src/lib/types.ts
++++ b/src/lib/types.ts
+@@ -163,6 +163,15 @@ export type FormulaTest = {
+   lab_tests?: LabTest | null;
+ };
+ 
++/** Packaging or material used per dispensed order (not per batch). */
++export type FormulaDispensingItem = {
++  id: string;
++  formula_id: string;
++  component_id: string;
++  quantity: number | string;
++  components?: Component | null;
++};
++
+ export type Formula = {
+   id: string;
+   name: string;
+@@ -178,6 +187,11 @@ export type Formula = {
+   labor_minutes: number | string;
+   labor_rate_cents: number | string;
+   testing_cost_cents: number | string;
++  /** Dispensing cost per order (0025); absent until that migration runs. */
++  dispense_filling_cents?: number | string | null;
++  dispense_pv_cents?: number | string | null;
++  dispense_shipping_cents?: number | string | null;
++  dispense_overhead_cents?: number | string | null;
+   formula_ingredients?: FormulaIngredient[];
+   formula_components?: FormulaComponent[];
+   formula_labor?: FormulaLabor[];
+diff --git a/supabase/migrations/0025_formula_dispensing_cost.sql b/supabase/migrations/0025_formula_dispensing_cost.sql
+new file mode 100644
+index 0000000..c367eb4
+--- /dev/null
++++ b/supabase/migrations/0025_formula_dispensing_cost.sql
+@@ -0,0 +1,98 @@
++-- 0025_formula_dispensing_cost.sql
++--
++-- Dispensing cost per order on the master formula.
++--
++-- What it costs to dispense ONE order of a product, separate from what it
++-- costs to make the batch. It is never added to the batch cost breakdown or
++-- the per-unit all-in cost; it is carried to the quote side as its own figure.
++--
++--   Labor      flat $ per order: filling, pharmacist verification (PV), shipping
++--   Packaging  library components (Xpander pack, ice pack, ...) x quantity per
++--              order, priced at each component's preferred manufacturer
++--   Overhead   flat $ per order
++--
++-- Additive: every existing formula gets $0 in each field and no packaging
++-- lines, so nothing already shown changes value.
++
++alter table public.formulas
++  add column if not exists dispense_filling_cents numeric(14, 4) not null default 0
++    check (dispense_filling_cents >= 0),
++  add column if not exists dispense_pv_cents numeric(14, 4) not null default 0
++    check (dispense_pv_cents >= 0),
++  add column if not exists dispense_shipping_cents numeric(14, 4) not null default 0
++    check (dispense_shipping_cents >= 0),
++  add column if not exists dispense_overhead_cents numeric(14, 4) not null default 0
++    check (dispense_overhead_cents >= 0);
++
++comment on column public.formulas.dispense_filling_cents is 'Dispensing labor per order: filling.';
++comment on column public.formulas.dispense_pv_cents is 'Dispensing labor per order: pharmacist verification.';
++comment on column public.formulas.dispense_shipping_cents is 'Dispensing labor per order: shipping.';
++comment on column public.formulas.dispense_overhead_cents is 'Dispensing overhead per order.';
++
++create table if not exists public.formula_dispensing_items (
++  id uuid primary key default gen_random_uuid(),
++  organization_id uuid not null references public.organizations(id) on delete cascade,
++  formula_id uuid not null references public.formulas(id) on delete cascade,
++  component_id uuid not null references public.components(id) on delete restrict,
++  quantity numeric(14, 4) not null check (quantity > 0),
++  created_at timestamptz not null default now()
++);
++
++create index if not exists formula_dispensing_items_formula_idx
++  on public.formula_dispensing_items (formula_id);
++create index if not exists formula_dispensing_items_component_idx
++  on public.formula_dispensing_items (component_id);
++create index if not exists formula_dispensing_items_org_idx
++  on public.formula_dispensing_items (organization_id);
++
++comment on table public.formula_dispensing_items is
++  'Packaging and material used per dispensed order of a master formula (not per batch).';
++
++-- A packaging line belongs to the same pharmacy as its formula and component.
++create or replace function public.formula_dispensing_items_guard()
++returns trigger
++language plpgsql
++security definer
++set search_path = public
++as $$
++begin
++  if not exists (
++    select 1 from public.formulas f
++    where f.id = new.formula_id and f.organization_id = new.organization_id
++  ) then
++    raise exception 'Formula does not belong to this organization';
++  end if;
++  if not exists (
++    select 1 from public.components c
++    where c.id = new.component_id and c.organization_id = new.organization_id
++  ) then
++    raise exception 'Component does not belong to this organization';
++  end if;
++  return new;
++end;
++$$;
++
++drop trigger if exists formula_dispensing_items_guard on public.formula_dispensing_items;
++create trigger formula_dispensing_items_guard
++  before insert or update on public.formula_dispensing_items
++  for each row execute function public.formula_dispensing_items_guard();
++
++-- Same access as the rest of the master formula (see 0020_rls_performance).
++alter table public.formula_dispensing_items enable row level security;
++
++drop policy if exists "tenant_select_formula_dispensing_items" on public.formula_dispensing_items;
++create policy "tenant_select_formula_dispensing_items" on public.formula_dispensing_items for select
++using (organization_id in (select public.user_org_ids()));
++
++drop policy if exists "tenant_insert_formula_dispensing_items" on public.formula_dispensing_items;
++create policy "tenant_insert_formula_dispensing_items" on public.formula_dispensing_items for insert
++with check (organization_id in (select public.user_org_ids_with_roles(array['owner','admin','pharmacist']::public.app_role[])));
++
++drop policy if exists "tenant_update_formula_dispensing_items" on public.formula_dispensing_items;
++create policy "tenant_update_formula_dispensing_items" on public.formula_dispensing_items for update
++using (organization_id in (select public.user_org_ids_with_roles(array['owner','admin','pharmacist']::public.app_role[])))
++with check (organization_id in (select public.user_org_ids_with_roles(array['owner','admin','pharmacist']::public.app_role[])));
++
++drop policy if exists "tenant_delete_formula_dispensing_items" on public.formula_dispensing_items;
++create policy "tenant_delete_formula_dispensing_items" on public.formula_dispensing_items for delete
++using (organization_id in (select public.user_org_ids_with_roles(array['owner','admin','pharmacist']::public.app_role[])));
+diff --git a/tests/dispensing-cost.test.ts b/tests/dispensing-cost.test.ts
+new file mode 100644
+index 0000000..d81d71f
+--- /dev/null
++++ b/tests/dispensing-cost.test.ts
+@@ -0,0 +1,44 @@
++import assert from "node:assert/strict";
++import test from "node:test";
++import { calculateDispensingCost } from "../src/lib/dispensing-cost";
++
++test("sums labor, packaging, and overhead per order", () => {
++  const result = calculateDispensingCost({
++    fillingCents: 150,
++    pvCents: 200,
++    shippingCents: 50,
++    overheadCents: 25,
++    packaging: [
++      { quantity: 1, unitCostCents: 85 },
++      { quantity: 4, unitCostCents: 12.5 },
++    ],
++  });
++  assert.deepEqual(result, {
++    laborCents: 400,
++    packagingCents: 135,
++    overheadCents: 25,
++    totalCents: 560,
++  });
++});
++
++test("an empty dispensing cost is $0", () => {
++  const result = calculateDispensingCost({
++    fillingCents: 0,
++    pvCents: 0,
++    shippingCents: 0,
++    overheadCents: 0,
++    packaging: [],
++  });
++  assert.equal(result.totalCents, 0);
++});
++
++test("ignores negative or non-numeric values", () => {
++  const result = calculateDispensingCost({
++    fillingCents: Number.NaN,
++    pvCents: -100,
++    shippingCents: 100,
++    overheadCents: 0,
++    packaging: [{ quantity: -2, unitCostCents: 50 }],
++  });
++  assert.equal(result.totalCents, 100);
++});
+-- 
+2.43.0
+
