@@ -36,7 +36,7 @@ plus `failed` and `cancelled`.
 
 - `quarantined` already exists in the `batch_status` enum (migration 0001). The prototype labels it "Quarantine".
 - Add `failed` to the enum.
-- Entering quarantine: when the QA samples ship (tracking recorded or shipping label created). Pauses the clock.
+- Entering quarantine: when the tech clicks **Mark samples sent** in QA (after tracking is recorded). Records who and the send time, shows as **Quarantined - out for testing**, and pauses the clock. Creating a shipping label or entering tracking alone does not change status.
 - Leaving quarantine: when QA is marked complete with every lab result passing. Status returns to `in_progress`.
 - `failed`: a pharmacist rejects the batch after any lab test fails. Closes the batch like cancel; record and log are kept.
 - `cancelled`: Cancel on the workflow screen, reason required.
@@ -101,11 +101,12 @@ New route, for example `src/app/(app)/batches/[id]/run/page.tsx`.
 **Third-party testing** (from the MFR's Testing list; sterile defaults Endotoxin, Potency, Sterility):
 1. Pick the lab, choose tests, set samples per test. Total is compared with units pulled for testing/QA in Bottling.
 2. **Create lab submission** (ID `LS-{lot}`) → **8.5×11 requisition**: pharmacy info and contact, lab info and client account, lot, product, form, sterility, compounded date, BUD, batch size, units in batch, tests with samples and container, total samples enclosed, storage line, chain-of-custody signature lines, carrier and tracking.
-3. **Create shipping label** (service, weight, cold-pack flag) → 4×6 label and tracking, or enter carrier and tracking manually. Either one puts the batch in **quarantine**.
-4. **Sample labels** (any time during QA): a FOR TESTING ONLY version of the step 5 label, so the units going to the lab are labeled before shipping. Red "FOR TESTING ONLY · DO NOT DISPENSE" banner and footer, product, fill size and form, storage line, lot with barcode, MFD, BUD, lab name and submission ID; no client name. Number of labels prefills with the total samples on the lab submission (or the units pulled for testing/QA in Bottling before a submission exists). Printer picker. Each print job is logged (later jobs marked Reprint) and shown on the compounding record under QA. Dispensing labels in step 5 stay locked until results pass.
-5. **Lab results** (after shipping): upload the lab's paperwork (PDF or image, multiple files). Then each test is marked Pass or Fail; marking requires at least one file attached.
-6. Any Fail fails third-party testing: QA cannot complete and a **Reject batch** action closes the batch as `failed`.
-- **Mark QA complete** requires: all visual items passed, samples shipped, paperwork attached, every test Pass. Completing QA releases quarantine.
+3. **Create shipping label** (service, weight, cold-pack flag) → 4×6 label and tracking, or enter carrier and tracking manually.
+4. **Mark samples sent** when the package leaves. Stores `sent_at` and `sent_by`, sets status to quarantined (label "Quarantined - out for testing"), pauses the clock. The quarantine list's days waiting and the record's "Out for testing" duration count from this time. Lab results can only be entered after this.
+5. **Sample labels** (any time during QA): a FOR TESTING ONLY version of the step 5 label, so the units going to the lab are labeled before shipping. Red "FOR TESTING ONLY · DO NOT DISPENSE" banner and footer, product, fill size and form, storage line, lot with barcode, MFD, BUD, lab name and submission ID; no client name. Number of labels prefills with the total samples on the lab submission (or the units pulled for testing/QA in Bottling before a submission exists). Printer picker. Each print job is logged (later jobs marked Reprint) and shown on the compounding record under QA. Dispensing labels in step 5 stay locked until results pass.
+6. **Lab results** (after samples are marked sent): upload the lab's paperwork (PDF or image, multiple files). Then each test is marked Pass or Fail; marking requires at least one file attached.
+7. Any Fail fails third-party testing: QA cannot complete and a **Reject batch** action closes the batch as `failed`.
+- **Mark QA complete** requires: all visual items passed, tracking recorded, samples marked sent, paperwork attached, every test Pass. Completing QA releases quarantine.
 
 ### Step 5: Labeling
 
@@ -117,7 +118,7 @@ New route, for example `src/app/(app)/batches/[id]/run/page.tsx`.
 
 ## 5. Activity log and productivity
 
-Every action writes an event: batch started/paused/resumed (with reason), step started/completed/reopened, each measurement, review requested, verified, returned, mixing step done/undone, timer start/stop/reset, fill equipment set, fill checks added/removed, yield recorded/edited, visual pass/fail, submission created/edited, requisition printed, sample labels printed, shipping label, tracking, quarantined, documents attached/removed, lab result pass/fail/cleared, released, labeling equipment set, labels printed/reprinted, completed, cancelled, rejected.
+Every action writes an event: batch started/paused/resumed (with reason), step started/completed/reopened, each measurement, review requested, verified, returned, mixing step done/undone, timer start/stop/reset, fill equipment set, fill checks added/removed, yield recorded/edited, visual pass/fail, submission created/edited, requisition printed, sample labels printed, shipping label, tracking, samples sent, quarantined, documents attached/removed, lab result pass/fail/cleared, released, labeling equipment set, labels printed/reprinted, completed, cancelled, rejected.
 
 Each event stores batch, step, user, timestamp, type, human-readable label, and a JSON payload. This is the basis for productivity per user (actions per person, time per section, sections completed per person). The existing `audit_events` table can keep its org-level role; a dedicated `batch_events` table is easier to query per batch.
 
@@ -176,7 +177,8 @@ create table batch_fill (batch_id primary key, organization_id, equipment_id, fi
 create table batch_fill_checks (id, organization_id, batch_id, device_id, value numeric, in_tolerance bool, note, by, at);
 create table batch_visual_results (id, organization_id, batch_id, text, ok bool, note, by, at);
 create table lab_submissions (id, organization_id, batch_id, code text, lab_id, created_by, created_at,
-  carrier text, tracking text, label_service text, label_weight numeric, cold_pack bool, shipped_by, shipped_at);
+  carrier text, tracking text, label_service text, label_weight numeric, cold_pack bool, shipped_by, shipped_at,
+  sent_by uuid, sent_at timestamptz);
 create table lab_submission_tests (id, organization_id, submission_id, lab_test_id, samples int,
   result text check (result in ('pass','fail')), result_by, result_at);
 create table lab_documents (id, organization_id, batch_id, storage_path text, file_name, size_bytes, content_type, uploaded_by, uploaded_at);
@@ -212,4 +214,5 @@ create table batch_events (id bigserial, organization_id, batch_id, step text, a
 - Search bar (lot #, formula or client), filters as you type.
 - Status filter chips with counts (no count on Complete): All, Draft, Scheduled, In progress, Quarantine, Complete, Failed, Cancelled. Only statuses with batches show.
 - When a search or filter is active, only the matching batch records show, with a match count and Clear.
-- With no filter: a **Quarantine · awaiting lab results** table (lot, formula, lab, tests, shipped date and tracking, days waiting, results in, files attached, Enter results), then My batches, then Batch records.
+- Status badge text for quarantined batches: "Quarantined - out for testing"; filter chip "Quarantined".
+- With no filter: a **Quarantined - out for testing** table (lot, formula, lab, tests, sent date/time and tracking, days waiting, results in, files attached, Enter results), then My batches, then Batch records.

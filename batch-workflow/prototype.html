@@ -291,15 +291,16 @@ function seed() {
     r.fill = { good: 10, qa: 3, locked: true, by: "m4", at: "2026-10-16T09:55:00" };
     q.actualYield = 10;
     const sub = { id: "LS-MC-261016-01", labId: "lab1", tests: q.tests.map((t) => ({ lineId: t.id, testId: t.testId, name: by(S.tests, t.testId).name, samples: 1 })), by: "m4", at: "2026-10-16T10:20:00",
-      carrier: "FedEx Priority Overnight", tracking: "796240118837", shippedBy: "m4", shippedAt: "2026-10-16T10:44:00", label: { service: "FedEx Priority Overnight", weight: "1.5", cold: true } };
+      carrier: "FedEx Priority Overnight", tracking: "796240118837", shippedBy: "m4", shippedAt: "2026-10-16T10:44:00", sentBy: "m4", sentAt: "2026-10-16T11:05:00", label: { service: "FedEx Priority Overnight", weight: "1.5", cold: true } };
     r.qa = { visual: Object.fromEntries(q.visual.map((v, i) => [v.id, { ok: true, note: "", by: "m4", at: `2026-10-16T10:0${5 + i}:00` }])), sub, docs: [], results: {} };
-    q.status = "quarantine"; r.quarantinedAt = "2026-10-16T10:44:00";
+    q.status = "quarantine"; r.quarantinedAt = "2026-10-16T11:05:00";
     [["2026-10-16T09:12:00", "fill_equip", "Filling equipment: Peristaltic filler, Watson-Marlow 520"],
      ["2026-10-16T09:55:00", "fill_recorded", "Recorded yield: 10 finished packages, 3 to testing/QA"],
      ["2026-10-16T10:08:00", "visual_pass", "Visual inspection passed: all items"],
      ["2026-10-16T10:20:00", "submission_created", `Created lab submission ${sub.id} for Sonoran Analytical Labs`],
      ["2026-10-16T10:44:00", "shipping_label", `Created FedEx Priority Overnight label to Sonoran Analytical Labs, tracking ${sub.tracking}`],
-     ["2026-10-16T10:44:00", "quarantined", "Quarantined pending lab results from Sonoran Analytical Labs"]].forEach(([at, type, label]) => runEvent(q, "m4", type, label, "qa", at));
+     ["2026-10-16T11:05:00", "samples_sent", `Marked samples sent for testing to Sonoran Analytical Labs (FedEx Priority Overnight ${sub.tracking})`],
+     ["2026-10-16T11:05:00", "quarantined", "Status: Quarantined - out for testing (Sonoran Analytical Labs)"]].forEach(([at, type, label]) => runEvent(q, "m4", type, label, "qa", at));
     r.events.sort((x, y) => x.at.localeCompare(y.at));
   }
   S.batches.sort((a, b) => (b.made || "9999").localeCompare(a.made || "9999"));
@@ -596,6 +597,7 @@ function qaProblems(b) {
   if ((b.visual || []).some((v) => !q.visual[v.id]?.ok)) p.push("Pass every visual inspection item.");
   if (thirdPartyTests(b).length && !q.sub) p.push("Create the lab submission.");
   else if (q.sub && !q.sub.tracking) p.push("Ship the samples and record tracking.");
+  else if (q.sub && !q.sub.sentAt) p.push("Mark the samples sent for testing.");
   else if (q.sub) {
     if (!qaDocs(b).length) p.push("Attach the lab results.");
     const o = labOutcome(b);
@@ -665,7 +667,12 @@ function qaModule(b, st, locked) {
       <ul class="mt-3 grid gap-1 border-t border-stone-100 pt-3">${rows}<li class="flex justify-between border-t border-stone-100 pt-1 text-sm font-semibold"><span>Total samples</span><span class="font-mono">${q.sub.tests.reduce((a, t) => a + t.samples, 0)}</span></li></ul>
       <div class="mt-4 border-t border-stone-100 pt-4">
         ${q.sub.tracking ? `<div class="flex flex-wrap items-center justify-between gap-3"><div class="text-sm"><span class="text-stone-500">${esc(q.sub.carrier)} tracking</span> <span class="font-mono font-semibold text-stone-900">${esc(q.sub.tracking)}</span><div class="text-xs text-stone-500">Recorded by ${esc(person(q.sub.shippedBy).name)} · ${fts(q.sub.shippedAt)}</div></div>
-            ${q.sub.label ? `<button data-a="qaViewLabel" data-id="${b.id}" class="${smallButtonClass}">${icon("package", "h-3.5 w-3.5")}View shipping label</button>` : ""}</div>`
+            ${q.sub.label ? `<button data-a="qaViewLabel" data-id="${b.id}" class="${smallButtonClass}">${icon("package", "h-3.5 w-3.5")}View shipping label</button>` : ""}</div>
+          ${q.sub.sentAt
+            ? `<div class="mt-4 flex flex-wrap items-center gap-3 rounded-lg border border-violet-200 bg-violet-50/60 p-3 text-sm">${icon("send", "h-4 w-4 flex-shrink-0 text-violet-600")}<span class="text-violet-900"><span class="font-semibold">Sent for testing</span> by ${esc(person(q.sub.sentBy).name)} · ${fts(q.sub.sentAt)}</span></div>`
+            : `<div class="mt-4 flex flex-col gap-3 rounded-lg border border-violet-200 bg-violet-50/40 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div class="text-sm"><p class="font-semibold text-stone-900">Samples sent for testing?</p><p class="text-stone-600">Mark this when the package leaves (handed to the carrier or courier). The batch moves to <span class="font-medium">Quarantined - out for testing</span> and the send time is recorded.</p></div>
+                ${editable ? `<button data-a="markSent" data-id="${b.id}" class="${buttonClass} flex-shrink-0 bg-violet-600 hover:bg-violet-700">${icon("send")}Mark samples sent</button>` : ""}</div>`}`
           : editable ? `<div class="flex flex-wrap items-end gap-3">
               <button data-a="qaShipLabel" data-id="${b.id}" class="${buttonClass}">${icon("package")}Create shipping label</button>
               <span class="pb-2 text-xs text-stone-400">or</span>
@@ -699,7 +706,7 @@ function qaModule(b, st, locked) {
     </div>` : "";
   /* Lab results: paperwork attached, then a pass/fail per test. Any failure fails the batch. */
   let resBlock = "";
-  if (q.sub?.tracking) {
+  if (q.sub?.sentAt) {
     const docs = qaDocs(b), res = qaResults(b), outcome = labOutcome(b);
     const fmtSize = (n) => (n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB");
     const docRows = docs.map((d) => `<li class="flex items-center justify-between gap-3 rounded-lg border border-stone-200/80 px-3 py-2 text-sm">
@@ -936,7 +943,7 @@ function quarantine(b, user, at) {
   if (b.status === "quarantine") return;
   b.status = "quarantine"; b.run.quarantinedAt = at;
   autoPause(b, user, "Paused (quarantined, awaiting lab results)");
-  runEvent(b, user, "quarantined", `Quarantined pending lab results from ${by(S.labs, qaState(b).sub.labId).name}`, "qa", at);
+  runEvent(b, user, "quarantined", `Status: Quarantined - out for testing (${by(S.labs, qaState(b).sub.labId).name})`, "qa", at);
   log(`batch.quarantined · ${b.lot}`);
 }
 const daysSince = (isoStr) => Math.max(0, Math.floor((new Date() - tsDate(isoStr)) / 86400000));
@@ -950,7 +957,7 @@ const Avatar = (id, size = "h-6 w-6 text-[10px]") => { const p = person(id); ret
 
 /* ------------------------------ state ------------------------------- */
 /* The demo keeps its data in this browser so a reload or a closed tab doesn't lose the batch clock. */
-const STORE_KEY = "costlab-demo-v12";
+const STORE_KEY = "costlab-demo-v13";
 function saveState() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify({ S, seq, savedAt: nowIso() }, (k, v) => (k === "dataUrl" && typeof v === "string" && v.length > 300000 ? undefined : v))); } catch {}
 }
@@ -993,7 +1000,8 @@ const toneClasses = {
 const Badge = (children, tone = "neutral", extra = "", dot = false, title = "") =>
   `<span ${title ? `title="${esc(title)}"` : ""} class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset whitespace-nowrap ${toneClasses[tone]} ${extra}">${dot ? '<span class="h-1.5 w-1.5 rounded-full bg-current opacity-70"></span>' : ""}${children}</span>`;
 const statusTone = { draft: "neutral", scheduled: "blue", in_progress: "amber", quarantine: "violet", complete: "green", cancelled: "red", failed: "red" };
-const StatusBadge = (s, extra = "") => Badge(esc(String(s).replace(/_/g, " ")), statusTone[s] || "neutral", "capitalize " + extra, true);
+const STATUS_LABELS = { draft: "Draft", scheduled: "Scheduled", in_progress: "In progress", quarantine: "Quarantined - out for testing", complete: "Complete", cancelled: "Cancelled", failed: "Failed" };
+const StatusBadge = (s, extra = "") => Badge(esc(STATUS_LABELS[s] ?? String(s).replace(/_/g, " ")), statusTone[s] || "neutral", extra, true);
 const sterLabel = (v) => (v === "sterile" ? "Sterile" : v === "non_sterile" ? "Non-sterile" : "Unclassified");
 const SterilityBadge = (v, frozen = false) => Badge(`${v === "sterile" ? icon("shield-check", "h-3 w-3") : ""}${sterLabel(v)}`, v === "sterile" ? "violet" : v === "non_sterile" ? "blue" : "amber", "", false, frozen ? "Recorded at completion" : "");
 const PageHeader = (title, description, actions = "") => `
@@ -1269,7 +1277,7 @@ pages.batches = () => {
     <td class="${tdClass} whitespace-nowrap text-stone-600">${esc(placeText(b.slot))}</td>
     <td class="${tdClass} whitespace-nowrap text-right"><button data-a="nav" data-to="batch" data-id="${b.id}" class="${iconButtonClass}" title="View">${icon("eye", "h-3.5 w-3.5")}</button></td></tr>`).join("");
   /* Search by lot # (also formula or client) and filter by status. */
-  const FILTERS = [["all", "All"], ["draft", "Draft"], ["scheduled", "Scheduled"], ["in_progress", "In progress"], ["quarantine", "Quarantine"], ["complete", "Complete"], ["failed", "Failed"], ["cancelled", "Cancelled"]];
+  const FILTERS = [["all", "All"], ["draft", "Draft"], ["scheduled", "Scheduled"], ["in_progress", "In progress"], ["quarantine", "Quarantined"], ["complete", "Complete"], ["failed", "Failed"], ["cancelled", "Cancelled"]];
   const term = (UI.batchQ || "").trim().toLowerCase();
   const matches = (b) => !term || [b.lot, by(S.formulas, b.formulaId)?.name, by(S.clients, b.clientId)?.name].some((v) => (v || "").toLowerCase().includes(term));
   const searched = S.batches.filter(matches);
@@ -1303,13 +1311,13 @@ pages.batches = () => {
   return `${PageHeader("Production Batches", "Plan and track production batches from master formulas with scaled material, labor, packaging, testing, yield, and BUD costing.",
       `<button data-a="nav" data-to="batchreport" class="${secondaryButtonClass}">${icon("chart-column")}Batch report</button><button data-a="newBatch" class="${buttonClass}">${icon("plus")}New batch</button>`)}
     ${filterBar}
-    ${(() => { const qs = S.batches.filter((x) => x.status === "quarantine"); return qs.length && !filtered ? TableCard("Quarantine · awaiting lab results", `<table class="${tableClass} min-w-[860px]"><thead class="${theadClass}"><tr><th class="${thClass}">Lot #</th><th class="${thClass}">Formula</th><th class="${thClass}">Lab</th><th class="${thClass}">Tests</th><th class="${thClass}">Shipped</th><th class="${thClass}">Waiting</th><th class="${thClass}">Results</th><th class="${thClass} text-right">Actions</th></tr></thead><tbody class="${tbodyClass}">
+    ${(() => { const qs = S.batches.filter((x) => x.status === "quarantine"); return qs.length && !filtered ? TableCard("Quarantined - out for testing", `<table class="${tableClass} min-w-[860px]"><thead class="${theadClass}"><tr><th class="${thClass}">Lot #</th><th class="${thClass}">Formula</th><th class="${thClass}">Lab</th><th class="${thClass}">Tests</th><th class="${thClass}">Sent</th><th class="${thClass}">Waiting</th><th class="${thClass}">Results</th><th class="${thClass} text-right">Actions</th></tr></thead><tbody class="${tbodyClass}">
       ${qs.map((x) => { const q = qaState(x); const res = qaResults(x); const got = q.sub.tests.filter((t) => res[t.lineId]).length; return `<tr class="${trClass}">
         <td class="${tdClass} whitespace-nowrap font-mono font-semibold text-stone-900"><button data-a="nav" data-to="batch" data-id="${x.id}" class="hover:text-brand hover:underline">${esc(x.lot)}</button></td>
         <td class="${tdClass} min-w-[8rem] text-stone-700">${esc(by(S.formulas, x.formulaId).name)}</td>
         <td class="${tdClass} text-stone-700">${esc(by(S.labs, q.sub.labId).name)}</td>
         <td class="${tdClass} text-stone-600">${esc(q.sub.tests.map((t) => t.name.split(" (")[0]).join(", "))}</td>
-        <td class="${tdClass} whitespace-nowrap text-stone-600">${fd(q.sub.shippedAt.slice(0, 10))}<div class="font-mono text-[11px] text-stone-400">${esc(q.sub.tracking)}</div></td>
+        <td class="${tdClass} whitespace-nowrap text-stone-600">${fts(q.sub.sentAt)}<div class="font-mono text-[11px] text-stone-400">${esc(q.sub.tracking)}</div></td>
         <td class="${tdClass} whitespace-nowrap font-mono text-stone-700">${daysSince(x.run.quarantinedAt)} days</td>
         <td class="${tdClass}">${Badge(`${got} of ${q.sub.tests.length} in`, got ? "blue" : "neutral", "px-2 py-0 text-[11px]")}${qaDocs(x).length ? `<div class="mt-0.5 text-[11px] text-stone-500">${qaDocs(x).length} ${qaDocs(x).length === 1 ? "file" : "files"} attached</div>` : ""}</td>
         <td class="${tdClass} whitespace-nowrap text-right"><button data-a="nav" data-to="run" data-id="${x.id}" class="${smallButtonClass}">${icon("paperclip", "h-3.5 w-3.5")}Enter results</button></td></tr>`; }).join("")}
@@ -1468,7 +1476,7 @@ pages.run = () => {
       ${open ? `<div class="border-t border-stone-100 px-4 py-4 sm:px-5">${body}</div>` : ""}
     </section>`;
   };
-  const evIcon = { batch_started: "play", paused: "pause", resumed: "play", step_started: "circle-dot", step_completed: "circle-check", step_reopened: "undo-2", timer_started: "timer", fill_recorded: "package-check", fill_equip: "cog", quarantined: "lock", released: "lock-open", label_equip: "cog", doc_attached: "paperclip", doc_removed: "trash-2", result_pass: "badge-check", result_fail: "octagon-x", result_cleared: "undo-2", batch_failed: "octagon-x", visual_pass: "eye", visual_fail: "triangle-alert", visual_cleared: "undo-2", submission_created: "file-text", submission_edited: "pencil", requisition_printed: "printer", shipping_label: "package", tracking_recorded: "truck", labels_printed: "printer", sample_labels_printed: "printer", fill_check: "clipboard-check", fill_check_fail: "triangle-alert", fill_check_removed: "trash-2", fill_edited: "pencil", timer_stopped: "timer-off", timer_reset: "rotate-ccw", mix_step_done: "check", mix_step_undone: "undo-2", measured: "scale", measure_cleared: "eraser", review_requested: "send", verified: "badge-check", returned: "corner-up-left", yield_recorded: "hash", batch_completed: "lock", batch_cancelled: "circle-x" };
+  const evIcon = { batch_started: "play", paused: "pause", resumed: "play", step_started: "circle-dot", step_completed: "circle-check", step_reopened: "undo-2", timer_started: "timer", fill_recorded: "package-check", fill_equip: "cog", quarantined: "lock", released: "lock-open", label_equip: "cog", doc_attached: "paperclip", doc_removed: "trash-2", result_pass: "badge-check", result_fail: "octagon-x", result_cleared: "undo-2", batch_failed: "octagon-x", visual_pass: "eye", visual_fail: "triangle-alert", visual_cleared: "undo-2", submission_created: "file-text", submission_edited: "pencil", requisition_printed: "printer", shipping_label: "package", tracking_recorded: "truck", labels_printed: "printer", sample_labels_printed: "printer", samples_sent: "send", fill_check: "clipboard-check", fill_check_fail: "triangle-alert", fill_check_removed: "trash-2", fill_edited: "pencil", timer_stopped: "timer-off", timer_reset: "rotate-ccw", mix_step_done: "check", mix_step_undone: "undo-2", measured: "scale", measure_cleared: "eraser", review_requested: "send", verified: "badge-check", returned: "corner-up-left", yield_recorded: "hash", batch_completed: "lock", batch_cancelled: "circle-x" };
   const perUser = {};
   b.run.events.forEach((e) => (perUser[e.user] = (perUser[e.user] || 0) + 1));
   return `${BackLink2("batch", b.id, "Back to batch record")}
@@ -1503,7 +1511,7 @@ pages.run = () => {
           <button data-a="runComplete" data-id="${b.id}" class="${buttonClass} h-11 px-5" ${problems.length ? `disabled title="${esc(problems.join(" "))}"` : ""}>${icon("circle-check")}Complete batch</button>`}
         </div>
       </div>
-      ${b.status === "quarantine" ? `<div class="mt-4 flex gap-3 rounded-lg border border-violet-200 bg-violet-50/70 p-3 text-sm">${icon("lock", "mt-0.5 h-4 w-4 flex-shrink-0 text-violet-600")}<div><p class="font-semibold text-violet-900">In quarantine · day ${daysSince(b.run.quarantinedAt) + 1}</p><p class="text-violet-900/80">Samples went to ${esc(by(S.labs, qaState(b).sub.labId).name)} on ${fd(qaState(b).sub.shippedAt.slice(0, 10))} (${esc(qaState(b).sub.carrier)} ${esc(qaState(b).sub.tracking)}). Attach the results in QA when they come back. Labeling unlocks once every test passes.</p></div></div>` : ""}
+      ${b.status === "quarantine" ? `<div class="mt-4 flex gap-3 rounded-lg border border-violet-200 bg-violet-50/70 p-3 text-sm">${icon("lock", "mt-0.5 h-4 w-4 flex-shrink-0 text-violet-600")}<div><p class="font-semibold text-violet-900">Quarantined - out for testing · day ${daysSince(b.run.quarantinedAt) + 1}</p><p class="text-violet-900/80">Samples sent to ${esc(by(S.labs, qaState(b).sub.labId).name)} ${fts(qaState(b).sub.sentAt)} by ${esc(person(qaState(b).sub.sentBy).name)} (${esc(qaState(b).sub.carrier)} ${esc(qaState(b).sub.tracking)}). Attach the results in QA when they come back. Labeling unlocks once every test passes.</p></div></div>` : ""}
       <div class="mt-4 flex items-center gap-3"><div class="h-1.5 flex-1 overflow-hidden rounded-full bg-stone-100"><div class="h-full rounded-full bg-brand transition-all" style="width:${(doneCount / STEPS.length) * 100}%"></div></div><span class="text-xs font-medium text-stone-500">${doneCount} of ${STEPS.length} sections done</span></div>
       ${!closed && problems.length ? `<p class="mt-3 text-xs text-stone-500"><span class="font-semibold text-stone-700">To complete:</span> ${problems.map(esc).join(" ")}</p>` : ""}
     </div>
@@ -1569,8 +1577,8 @@ function recordDoc(b) {
       <div class="mt-2 overflow-x-auto"><table class="w-full min-w-[600px] text-xs text-stone-700"><thead><tr><th class="${th}">Visual inspection</th><th class="${th}">Result</th><th class="${th}">By</th></tr></thead><tbody>
         ${(b.visual || []).map((v) => { const r = run.qa.visual[v.id]; return `<tr><td class="${td}">${esc(v.text)}</td><td class="${td} ${r ? (r.ok ? "text-emerald-700" : "text-red-600") : "text-stone-400"}">${r ? (r.ok ? "Pass" : "Fail") + (r.note ? ` · ${esc(r.note)}` : "") : "—"}</td><td class="${td}">${r ? `${esc(person(r.by).name)}<div class="text-stone-500">${fts(r.at)}</div>` : "—"}</td></tr>`; }).join("")}
       </tbody></table></div>
-      ${run.qa.sub ? `<dl class="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">${kv("Lab submission", `<span class="font-mono">${esc(run.qa.sub.id)}</span>`)}${kv("Laboratory", esc(by(S.labs, run.qa.sub.labId).name))}${kv("Tests", esc(run.qa.sub.tests.map((t) => `${t.name} ×${t.samples}`).join(", ")))}${kv("Shipped", run.qa.sub.tracking ? `${esc(run.qa.sub.carrier)}<div class="font-mono text-xs">${esc(run.qa.sub.tracking)}</div>` : "Not yet")}</dl>` : ""}
-      ${run.qa.sub?.tracking ? `<div class="mt-3 overflow-x-auto"><table class="w-full min-w-[520px] text-xs text-stone-700"><thead><tr><th class="${th}">Lab result</th><th class="${th}">Result</th><th class="${th}">Recorded by</th></tr></thead><tbody>
+      ${run.qa.sub ? `<dl class="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">${kv("Lab submission", `<span class="font-mono">${esc(run.qa.sub.id)}</span>`)}${kv("Laboratory", esc(by(S.labs, run.qa.sub.labId).name))}${kv("Tests", esc(run.qa.sub.tests.map((t) => `${t.name} ×${t.samples}`).join(", ")))}${kv("Tracking", run.qa.sub.tracking ? `${esc(run.qa.sub.carrier)}<div class="font-mono text-xs">${esc(run.qa.sub.tracking)}</div>` : "Not yet")}${kv("Sent for testing", run.qa.sub.sentAt ? `${fts(run.qa.sub.sentAt)}<div class="text-xs text-stone-500">${esc(person(run.qa.sub.sentBy).name)}</div>` : "Not yet")}${kv("Out for testing", run.qa.sub.sentAt && (run.releasedAt || b.run.cancelledAt) ? `${Math.max(0, Math.round((tsDate(run.releasedAt || b.run.cancelledAt) - tsDate(run.qa.sub.sentAt)) / 86400000))} days` : run.qa.sub.sentAt ? "In progress" : "—")}</dl>` : ""}
+      ${run.qa.sub?.sentAt ? `<div class="mt-3 overflow-x-auto"><table class="w-full min-w-[520px] text-xs text-stone-700"><thead><tr><th class="${th}">Lab result</th><th class="${th}">Result</th><th class="${th}">Recorded by</th></tr></thead><tbody>
         ${run.qa.sub.tests.map((t) => { const r = run.qa.results?.[t.lineId]; return `<tr><td class="${td}">${esc(t.name)}</td><td class="${td} font-semibold ${r ? (r.ok ? "text-emerald-700" : "text-red-600") : "text-stone-400"}">${r ? (r.ok ? "Pass" : "Fail") : "Pending"}</td><td class="${td}">${r ? `${esc(person(r.by).name)}<div class="text-stone-500">${fts(r.at)}</div>` : "—"}</td></tr>`; }).join("")}
         <tr><td class="${td} font-semibold text-stone-900">Overall third-party testing</td><td class="${td} font-semibold ${labOutcome(b) === "pass" ? "text-emerald-700" : labOutcome(b) === "fail" ? "text-red-600" : "text-stone-400"}" colspan="2">${labOutcome(b) === "pass" ? "Pass" : labOutcome(b) === "fail" ? "Fail" : "Pending"}</td></tr>
       </tbody></table></div>
@@ -2224,6 +2232,13 @@ const actions = {
     UI.qaDraft[b.id] = { labId: q.sub.labId, tests: Object.fromEntries(thirdPartyTests(b).map((x) => { const t = q.sub.tests.find((y) => y.lineId === x.line.id); return [x.line.id, { include: !!t, samples: t ? t.samples : 1 }]; })) };
     runEvent(b, UI.actor, "submission_edited", `Reopened lab submission ${q.sub.id}`, "qa"); q.sub = null; render();
   },
+  markSent: (el) => {
+    const b = by(S.batches, el.dataset.id); const q = qaState(b); const at = nowIso();
+    Object.assign(q.sub, { sentAt: at, sentBy: UI.actor });
+    runEvent(b, UI.actor, "samples_sent", `Marked samples sent for testing to ${by(S.labs, q.sub.labId).name} (${q.sub.carrier} ${q.sub.tracking})`, "qa", at);
+    quarantine(b, UI.actor, at);
+    render(); toast("Samples sent. Batch is Quarantined - out for testing.");
+  },
   qaShipLabel: (el) => openModal("shipLabel", { id: el.dataset.id }),
   qaViewLabel: (el) => openModal("shipLabelView", { id: el.dataset.id }),
   printReq: (el) => { const b = by(S.batches, el.dataset.id); runEvent(b, UI.actor, "requisition_printed", `Printed requisition ${qaState(b).sub?.id}`, "qa"); toast("Printing goes to the browser print dialog in the live app. The artifact viewer can't print."); },
@@ -2457,17 +2472,15 @@ const forms = {
   qaTracking: (fd, el) => {
     const b = by(S.batches, el.dataset.id); const q = qaState(b); const at = nowIso();
     Object.assign(q.sub, { carrier: fd.get("carrier"), tracking: fd.get("tracking").trim(), shippedBy: UI.actor, shippedAt: at });
-    runEvent(b, UI.actor, "tracking_recorded", `Shipped to ${by(S.labs, q.sub.labId).name}: ${q.sub.carrier} ${q.sub.tracking}`, "qa", at);
-    quarantine(b, UI.actor, at);
-    closeModal(); toast("Tracking recorded. Batch is in quarantine until results pass.");
+    runEvent(b, UI.actor, "tracking_recorded", `Tracking recorded for ${by(S.labs, q.sub.labId).name}: ${q.sub.carrier} ${q.sub.tracking}`, "qa", at);
+    closeModal(); toast("Tracking recorded. Mark the samples sent when they leave.");
   },
   shipLabel: (fd, el) => {
     const b = by(S.batches, el.dataset.id); const q = qaState(b); const at = nowIso(); const service = fd.get("service");
     const tracking = trackingFor(service);
     Object.assign(q.sub, { carrier: service, tracking, shippedBy: UI.actor, shippedAt: at, label: { service, weight: fd.get("weight"), cold: fd.get("cold") === "on" } });
     runEvent(b, UI.actor, "shipping_label", `Created ${service} label to ${by(S.labs, q.sub.labId).name}, tracking ${tracking}`, "qa", at);
-    quarantine(b, UI.actor, at);
-    UI.modal = { kind: "shipLabelView", id: b.id }; render(); toast("Label created. Batch is in quarantine until results pass.");
+    UI.modal = { kind: "shipLabelView", id: b.id }; render(); toast("Label created. Mark the samples sent when they leave.");
   },
   printSampleLabels: (fd, el) => {
     const b = by(S.batches, el.dataset.id); const copies = Math.floor(Number(fd.get("copies"))); const printerId = fd.get("printerId");
