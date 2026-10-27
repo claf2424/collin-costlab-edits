@@ -102,8 +102,9 @@ New route, for example `src/app/(app)/batches/[id]/run/page.tsx`.
 1. Pick the lab, choose tests, set samples per test. Total is compared with units pulled for testing/QA in Bottling.
 2. **Create lab submission** (ID `LS-{lot}`) → **8.5×11 requisition**: pharmacy info and contact, lab info and client account, lot, product, form, sterility, compounded date, BUD, batch size, units in batch, tests with samples and container, total samples enclosed, storage line, chain-of-custody signature lines, carrier and tracking.
 3. **Create shipping label** (service, weight, cold-pack flag) → 4×6 label and tracking, or enter carrier and tracking manually. Either one puts the batch in **quarantine**.
-4. **Lab results** (after shipping): upload the lab's paperwork (PDF or image, multiple files). Then each test is marked Pass or Fail; marking requires at least one file attached.
-5. Any Fail fails third-party testing: QA cannot complete and a **Reject batch** action closes the batch as `failed`.
+4. **Sample labels** (any time during QA): a FOR TESTING ONLY version of the step 5 label, so the units going to the lab are labeled before shipping. Red "FOR TESTING ONLY · DO NOT DISPENSE" banner and footer, product, fill size and form, storage line, lot with barcode, MFD, BUD, lab name and submission ID; no client name. Number of labels prefills with the total samples on the lab submission (or the units pulled for testing/QA in Bottling before a submission exists). Printer picker. Each print job is logged (later jobs marked Reprint) and shown on the compounding record under QA. Dispensing labels in step 5 stay locked until results pass.
+5. **Lab results** (after shipping): upload the lab's paperwork (PDF or image, multiple files). Then each test is marked Pass or Fail; marking requires at least one file attached.
+6. Any Fail fails third-party testing: QA cannot complete and a **Reject batch** action closes the batch as `failed`.
 - **Mark QA complete** requires: all visual items passed, samples shipped, paperwork attached, every test Pass. Completing QA releases quarantine.
 
 ### Step 5: Labeling
@@ -116,7 +117,7 @@ New route, for example `src/app/(app)/batches/[id]/run/page.tsx`.
 
 ## 5. Activity log and productivity
 
-Every action writes an event: batch started/paused/resumed (with reason), step started/completed/reopened, each measurement, review requested, verified, returned, mixing step done/undone, timer start/stop/reset, fill equipment set, fill checks added/removed, yield recorded/edited, visual pass/fail, submission created/edited, requisition printed, shipping label, tracking, quarantined, documents attached/removed, lab result pass/fail/cleared, released, labeling equipment set, labels printed/reprinted, completed, cancelled, rejected.
+Every action writes an event: batch started/paused/resumed (with reason), step started/completed/reopened, each measurement, review requested, verified, returned, mixing step done/undone, timer start/stop/reset, fill equipment set, fill checks added/removed, yield recorded/edited, visual pass/fail, submission created/edited, requisition printed, sample labels printed, shipping label, tracking, quarantined, documents attached/removed, lab result pass/fail/cleared, released, labeling equipment set, labels printed/reprinted, completed, cancelled, rejected.
 
 Each event stores batch, step, user, timestamp, type, human-readable label, and a JSON payload. This is the basis for productivity per user (actions per person, time per section, sections completed per person). The existing `audit_events` table can keep its org-level role; a dedicated `batch_events` table is easier to query per batch.
 
@@ -179,7 +180,8 @@ create table lab_submissions (id, organization_id, batch_id, code text, lab_id, 
 create table lab_submission_tests (id, organization_id, submission_id, lab_test_id, samples int,
   result text check (result in ('pass','fail')), result_by, result_at);
 create table lab_documents (id, organization_id, batch_id, storage_path text, file_name, size_bytes, content_type, uploaded_by, uploaded_at);
-create table label_print_jobs (id, organization_id, batch_id, printer_id, copies int, reprint bool, by, at);
+create table label_print_jobs (id, organization_id, batch_id, kind text check (kind in ('dispensing','testing')),
+  printer_id, copies int, reprint bool, by, at);
 alter table batches add column label_equipment_id uuid, add column quarantined_at timestamptz, add column released_at timestamptz,
   add column cancel_reason text;
 create table batch_events (id bigserial, organization_id, batch_id, step text, actor_user_id uuid, type text,

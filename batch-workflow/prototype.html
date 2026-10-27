@@ -677,6 +677,26 @@ function qaModule(b, st, locked) {
   }
   const tpBlock = `<h3 class="mb-1 mt-6 text-xs font-semibold uppercase tracking-wider text-stone-500">Third-party testing</h3>
     <p class="mb-2 text-xs text-stone-500">Tests from the master formula. Pick the lab, set the samples per test, then print the requisition to go in the box.</p>${tp}`;
+  /* Sample labels: printable during QA, unlike the dispensing labels in step 5. */
+  const sJobs = (q.sampleLabels ||= []);
+  const sPrinted = sJobs.reduce((a, j) => a + j.copies, 0);
+  const sNeeded = q.sub ? q.sub.tests.reduce((a, t) => a + t.samples, 0) : pulled;
+  const sampleBlock = tests.length ? `<h3 class="mb-1 mt-6 text-xs font-semibold uppercase tracking-wider text-stone-500">Sample labels</h3>
+    <p class="mb-2 text-xs text-stone-500">Label the units going to the lab. These say FOR TESTING ONLY and can be printed now; dispensing labels stay locked until results pass.</p>
+    <div class="grid gap-6 lg:grid-cols-[minmax(0,22rem)_1fr]">
+      <div class="rounded-xl bg-stone-100 p-4">${labelPreview(b, true)}</div>
+      <div class="min-w-0">
+        ${editable ? `<form data-f="printSampleLabels" data-id="${b.id}" class="grid gap-4 rounded-lg border border-stone-200/80 p-4">
+          <div class="grid gap-4 sm:grid-cols-2">
+            ${Field("Number of labels", `<input id="sl-n-${b.id}" name="copies" type="number" min="1" step="1" value="${Math.max(0, (sNeeded ?? 0) - sPrinted) || ""}" class="${inputClass} h-11 font-mono text-base" required>`, true, sNeeded != null ? `${sNeeded} ${sNeeded === 1 ? "unit" : "units"} ${q.sub ? "on the lab submission" : "pulled for testing/QA in Bottling"}${sPrinted ? `, ${sPrinted} printed so far` : ""}` : "")}
+            ${Field("Printer", `<select id="sl-p-${b.id}" name="printerId" class="${inputClass} h-11">${S.printers.map((p) => opt(p.id, p.name, UI.lastPrinter || (f.sterility === "sterile" ? "lp2" : "lp1"))).join("")}</select>`, true)}
+          </div>
+          <div><button class="${secondaryButtonClass} h-11 px-5">${icon("printer", "h-4 w-4")}Print sample labels</button></div>
+        </form>` : ""}
+        <div class="mt-3 flex items-center justify-between gap-3 text-sm"><span class="font-semibold text-stone-800">Printed</span><span class="font-mono text-xs ${sNeeded != null && sPrinted < sNeeded ? "text-amber-700" : "text-stone-500"}">${sPrinted}${sNeeded != null ? ` of ${sNeeded}` : ""}</span></div>
+        ${sJobs.length ? `<ul class="mt-2 grid gap-1.5">${sJobs.map((j) => `<li class="flex items-center justify-between gap-3 rounded-lg border border-stone-200/80 px-3 py-2 text-sm"><span class="flex min-w-0 items-center gap-2">${icon("printer", "h-3.5 w-3.5 flex-shrink-0 text-stone-400")}<span class="font-mono font-semibold text-stone-900">${j.copies}</span><span class="truncate text-stone-600">${esc(by(S.printers, j.printerId)?.name ?? "")}</span>${j.reprint ? Badge("Reprint", "amber", "px-1.5 py-0 text-[10px]") : ""}</span><span class="flex-shrink-0 text-xs text-stone-500">${esc(person(j.by).name.split(",")[0])} · ${ftime(j.at)}</span></li>`).join("")}</ul>` : '<p class="mt-2 rounded-lg border border-dashed border-stone-200 py-3 text-center text-sm text-stone-400">No sample labels printed yet.</p>'}
+      </div>
+    </div>` : "";
   /* Lab results: paperwork attached, then a pass/fail per test. Any failure fails the batch. */
   let resBlock = "";
   if (q.sub?.tracking) {
@@ -707,7 +727,7 @@ function qaModule(b, st, locked) {
   const footer = st.status === "active" ? `<div class="mt-4 flex flex-wrap items-center justify-end gap-3 border-t border-stone-100 pt-4">
       ${problems.length ? `<span class="text-xs text-stone-500">${problems.map(esc).join(" ")}</span>` : ""}
       <button data-a="stepDone" data-id="${b.id}" data-k="qa" class="${buttonClass}" ${problems.length || locked ? "disabled" : ""}>${icon("circle-check")}Mark QA complete</button></div>` : "";
-  return visBlock + tpBlock + resBlock + footer;
+  return visBlock + tpBlock + sampleBlock + resBlock + footer;
 }
 
 /* ---------------------------- Labeling module ------------------------ */
@@ -718,24 +738,28 @@ function barcodeSvg(text) {
   seqBits.forEach((w, i) => { if (i % 2 === 0) bars.push(`<rect x="${x}" y="0" width="${w}" height="28" fill="#111"></rect>`); x += w; });
   return `<svg viewBox="0 0 ${x} 28" preserveAspectRatio="none" class="h-7 w-full" aria-hidden="true">${bars.join("")}</svg>`;
 }
-function labelPreview(b) {
+function labelPreview(b, testing = false) {
   const f = by(S.formulas, b.formulaId);
   const bud = b.snapshot?.budDate ?? (b.made && f.bud ? addDays(b.made, f.bud) : null);
   const client = by(S.clients, b.clientId)?.name;
-  return `<div class="w-full max-w-[22rem] rounded-md border border-stone-300 bg-white p-3 font-sans text-[#111] shadow-[0_1px_0_rgba(0,0,0,0.04),0_8px_24px_-12px_rgba(0,0,0,0.25)]" style="aspect-ratio: 2 / 1.15">
+  const sub = testing ? b.run?.qa?.sub : null;
+  const lab = sub ? by(S.labs, sub.labId) : null;
+  return `<div class="w-full max-w-[22rem] rounded-md border ${testing ? "border-2 border-[#b91c1c]" : "border-stone-300"} bg-white p-3 font-sans text-[#111] shadow-[0_1px_0_rgba(0,0,0,0.04),0_8px_24px_-12px_rgba(0,0,0,0.25)]" style="aspect-ratio: 2 / ${testing ? "1.3" : "1.15"}">
     <div class="flex h-full flex-col">
+      ${testing ? `<div class="-mx-3 -mt-3 mb-1.5 bg-[#b91c1c] px-2 py-1 text-center text-[11px] font-black uppercase tracking-wide text-white">For testing only · Do not dispense</div>` : ""}
       <div class="flex items-start justify-between gap-2 border-b border-[#111] pb-1">
         <div class="min-w-0"><div class="truncate text-[10px] font-bold uppercase tracking-wide">${esc(S.org.name)}</div><div class="truncate text-[8px]">${esc(S.org.address)} · ${esc(S.org.phone)}</div></div>
         <div class="flex-shrink-0 text-right text-[8px] font-bold uppercase">${f.sterility === "sterile" ? "Sterile" : ""}<div>Rx only</div></div>
       </div>
       <div class="mt-1 text-[12px] font-bold leading-tight">${esc(f.name)}</div>
-      <div class="text-[9px]">${fq(f.dispQty)} ${esc(f.dispUnit)} · ${esc(f.form)}${client ? ` · For: ${esc(client)}` : ""}</div>
-      <div class="mt-0.5 line-clamp-2 text-[8.5px] leading-snug">${esc(f.labelText || "")}</div>
+      <div class="text-[9px]">${fq(f.dispQty)} ${esc(f.dispUnit)} · ${esc(f.form)}${client && !testing ? ` · For: ${esc(client)}` : ""}</div>
+      ${testing ? `<div class="mt-0.5 text-[8.5px] font-semibold leading-snug">QA sample${lab ? ` · ${esc(lab.name)}` : ""}${sub ? ` · ${esc(sub.id)}` : ""}</div><div class="text-[8px] leading-snug">${esc(f.labelText || "")}</div>`
+        : `<div class="mt-0.5 line-clamp-2 text-[8.5px] leading-snug">${esc(f.labelText || "")}</div>`}
       <div class="mt-auto grid grid-cols-[1fr_auto] items-end gap-2">
         <div class="min-w-0">${barcodeSvg(b.lot)}<div class="mt-0.5 font-mono text-[8px] tracking-wider">${esc(b.lot)}</div></div>
         <div class="text-right font-mono text-[9px] leading-tight"><div>LOT <b>${esc(b.lot)}</b></div><div>MFD ${b.made ? fd(b.made) : "—"}</div><div>BUD <b>${bud ? fd(bud) : "—"}</b></div></div>
       </div>
-      <div class="mt-1 border-t border-[#111] pt-0.5 text-[7.5px] uppercase tracking-wide">Compounded preparation</div>
+      <div class="mt-1 border-t ${testing ? "border-[#b91c1c] font-bold text-[#b91c1c]" : "border-[#111]"} pt-0.5 text-[7.5px] uppercase tracking-wide">${testing ? "For testing only · Do not dispense" : "Compounded preparation"}</div>
     </div></div>`;
 }
 const labelJobs = (b) => ((b.run.labels ||= { jobs: [] }).jobs);
@@ -1444,7 +1468,7 @@ pages.run = () => {
       ${open ? `<div class="border-t border-stone-100 px-4 py-4 sm:px-5">${body}</div>` : ""}
     </section>`;
   };
-  const evIcon = { batch_started: "play", paused: "pause", resumed: "play", step_started: "circle-dot", step_completed: "circle-check", step_reopened: "undo-2", timer_started: "timer", fill_recorded: "package-check", fill_equip: "cog", quarantined: "lock", released: "lock-open", label_equip: "cog", doc_attached: "paperclip", doc_removed: "trash-2", result_pass: "badge-check", result_fail: "octagon-x", result_cleared: "undo-2", batch_failed: "octagon-x", visual_pass: "eye", visual_fail: "triangle-alert", visual_cleared: "undo-2", submission_created: "file-text", submission_edited: "pencil", requisition_printed: "printer", shipping_label: "package", tracking_recorded: "truck", labels_printed: "printer", fill_check: "clipboard-check", fill_check_fail: "triangle-alert", fill_check_removed: "trash-2", fill_edited: "pencil", timer_stopped: "timer-off", timer_reset: "rotate-ccw", mix_step_done: "check", mix_step_undone: "undo-2", measured: "scale", measure_cleared: "eraser", review_requested: "send", verified: "badge-check", returned: "corner-up-left", yield_recorded: "hash", batch_completed: "lock", batch_cancelled: "circle-x" };
+  const evIcon = { batch_started: "play", paused: "pause", resumed: "play", step_started: "circle-dot", step_completed: "circle-check", step_reopened: "undo-2", timer_started: "timer", fill_recorded: "package-check", fill_equip: "cog", quarantined: "lock", released: "lock-open", label_equip: "cog", doc_attached: "paperclip", doc_removed: "trash-2", result_pass: "badge-check", result_fail: "octagon-x", result_cleared: "undo-2", batch_failed: "octagon-x", visual_pass: "eye", visual_fail: "triangle-alert", visual_cleared: "undo-2", submission_created: "file-text", submission_edited: "pencil", requisition_printed: "printer", shipping_label: "package", tracking_recorded: "truck", labels_printed: "printer", sample_labels_printed: "printer", fill_check: "clipboard-check", fill_check_fail: "triangle-alert", fill_check_removed: "trash-2", fill_edited: "pencil", timer_stopped: "timer-off", timer_reset: "rotate-ccw", mix_step_done: "check", mix_step_undone: "undo-2", measured: "scale", measure_cleared: "eraser", review_requested: "send", verified: "badge-check", returned: "corner-up-left", yield_recorded: "hash", batch_completed: "lock", batch_cancelled: "circle-x" };
   const perUser = {};
   b.run.events.forEach((e) => (perUser[e.user] = (perUser[e.user] || 0) + 1));
   return `${BackLink2("batch", b.id, "Back to batch record")}
@@ -1550,6 +1574,10 @@ function recordDoc(b) {
         ${run.qa.sub.tests.map((t) => { const r = run.qa.results?.[t.lineId]; return `<tr><td class="${td}">${esc(t.name)}</td><td class="${td} font-semibold ${r ? (r.ok ? "text-emerald-700" : "text-red-600") : "text-stone-400"}">${r ? (r.ok ? "Pass" : "Fail") : "Pending"}</td><td class="${td}">${r ? `${esc(person(r.by).name)}<div class="text-stone-500">${fts(r.at)}</div>` : "—"}</td></tr>`; }).join("")}
         <tr><td class="${td} font-semibold text-stone-900">Overall third-party testing</td><td class="${td} font-semibold ${labOutcome(b) === "pass" ? "text-emerald-700" : labOutcome(b) === "fail" ? "text-red-600" : "text-stone-400"}" colspan="2">${labOutcome(b) === "pass" ? "Pass" : labOutcome(b) === "fail" ? "Fail" : "Pending"}</td></tr>
       </tbody></table></div>
+      ${run.qa.sampleLabels?.length ? `<div class="mt-3 grid gap-4 sm:grid-cols-[minmax(0,18rem)_1fr]"><div class="rounded-lg bg-stone-100 p-3">${labelPreview(b, true)}</div>
+        <table class="w-full self-start text-xs text-stone-700"><thead><tr><th class="${th}">Sample labels</th><th class="${th}">Printer</th><th class="${th}">By</th></tr></thead><tbody>
+          ${run.qa.sampleLabels.map((j) => `<tr><td class="${td} font-mono">${j.copies}${j.reprint ? " (reprint)" : ""}</td><td class="${td}">${esc(by(S.printers, j.printerId)?.name ?? "")}</td><td class="${td}">${esc(person(j.by).name)}<div class="text-stone-500">${fts(j.at)}</div></td></tr>`).join("")}
+          <tr><td class="${td} font-mono font-semibold">${run.qa.sampleLabels.reduce((a, j) => a + j.copies, 0)}</td><td class="${td}" colspan="2">FOR TESTING ONLY labels printed</td></tr></tbody></table></div>` : ""}
       <div class="mt-3"><div class="text-[10px] font-semibold uppercase tracking-wide text-stone-500">Lab paperwork attached</div>
         <ul class="mt-1 grid gap-1 text-xs">${(run.qa.docs || []).map((d) => `<li class="flex items-center gap-2">${icon("paperclip", "h-3.5 w-3.5 text-stone-400")}<span class="font-medium text-stone-900">${esc(d.name)}</span><span class="text-stone-500">· ${esc(person(d.by).name)} · ${fts(d.at)}</span></li>`).join("") || '<li class="text-stone-400">None</li>'}</ul></div>` : ""}` : ""}
       ${run?.labels?.jobs?.length ? `<h3 class="mt-6 text-xs font-semibold uppercase tracking-wider text-stone-700">Labeling</h3>
@@ -2440,6 +2468,15 @@ const forms = {
     runEvent(b, UI.actor, "shipping_label", `Created ${service} label to ${by(S.labs, q.sub.labId).name}, tracking ${tracking}`, "qa", at);
     quarantine(b, UI.actor, at);
     UI.modal = { kind: "shipLabelView", id: b.id }; render(); toast("Label created. Batch is in quarantine until results pass.");
+  },
+  printSampleLabels: (fd, el) => {
+    const b = by(S.batches, el.dataset.id); const copies = Math.floor(Number(fd.get("copies"))); const printerId = fd.get("printerId");
+    if (!(copies > 0)) return toast("Enter how many sample labels to print.");
+    const q = qaState(b); const jobs = (q.sampleLabels ||= []); const at = nowIso();
+    jobs.push({ id: uid("sj"), copies, printerId, by: UI.actor, at, reprint: jobs.length > 0 });
+    UI.lastPrinter = printerId;
+    runEvent(b, UI.actor, "sample_labels_printed", `${jobs.length > 1 ? "Reprinted" : "Printed"} ${copies} FOR TESTING ONLY sample labels on ${by(S.printers, printerId).name}`, "qa", at);
+    render(); toast(`Sent ${copies} sample labels to the printer`);
   },
   printLabels: (fd, el) => {
     const b = by(S.batches, el.dataset.id);
