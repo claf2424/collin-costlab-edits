@@ -1,4 +1,15 @@
-# Costlab: Dispensing Cost (per order) prototype
+# Costlab edits
+
+Prototypes and specs for changes to `grantajensen/costlab`.
+
+| Folder | What |
+| --- | --- |
+| `batch-workflow/` | Start Batch workflow: measuring, mixing, bottling, QA with lab testing and quarantine, labeling, batch clock, activity log, compounding record PDF, Batches tab search and filters. Start with `batch-workflow/SPEC.md`. |
+| root (`index.html`, `reference/`) | Dispensing cost (per order) on the formula page. Described below. |
+
+---
+
+## Dispensing Cost (per order) prototype
 
 A clickable prototype of a new **Dispensing cost (per order)** section for the Master Formulation Record (formula detail page, `src/app/(app)/formulas/[id]/page.tsx`).
 
