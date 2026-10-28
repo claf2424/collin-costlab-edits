@@ -224,6 +224,15 @@ function seed() {
     me: team[0],
     types, components, units, forms, laborRoles, tests, clients, formulas, team, invites, places,
     settings: { tolApi: 2, tolOther: 5, fillTol: 3, pin: "1234" },
+    mixEquip: [
+      { id: "me1", name: "Hot plate stirrer, IKA C-MAG HS 7" },
+      { id: "me2", name: "Magnetic stirrer, Thermo Cimarec" },
+      { id: "me3", name: "Electronic mortar & pestle (Unguator)" },
+      { id: "me4", name: "3-roll ointment mill, Exakt 50" },
+      { id: "me5", name: "V-blender, 2 qt" },
+      { id: "me6", name: "Glass mortar and pestle" },
+      { id: "me7", name: "Vortex mixer" },
+    ],
     fillEquip: [
       { id: "e1", name: "Ohaus Repeater Pump #1" },
       { id: "e2", name: "Ohaus Repeater Pump #2" },
@@ -413,6 +422,7 @@ function batchProblems(S, b) {
 /* A batch run: active time segments (start/pause), one record per step,
    and an append-only event log. Every event names the user and the time. */
 const STEPS = [
+  { key: "pick", title: "Pick list", icon: "clipboard-list", hint: "Everything this batch needs, from its recipe. Gather each item, note the lot and expiration you pulled, and check it off before measuring starts." },
   { key: "weigh", title: "Ingredients + Measuring", icon: "scale", hint: "Every ingredient on this batch's recipe, pulled from the master formula. Pick or scan the scale or measuring device, take the reading, and lock it in. A pharmacist verifies the whole section." },
   { key: "mix", title: "Mixing", icon: "blend", hint: "The mixing instructions from the master formula, one line each. Timed steps need their timer run to the set time before they can be checked off." },
   { key: "fill", title: "Bottling", icon: "test-tube", hint: "The packaging this batch needs, from its recipe. Fill the containers, then record how many finished packages came out and how many were pulled for testing or QA." },
@@ -433,6 +443,10 @@ const runStarted = (b) => b.run && b.run.segments.length > 0;
 function elapsedMs(b) { if (!b.run) return 0; return b.run.segments.reduce((sum, seg) => sum + ((seg.end ? tsDate(seg.end) : new Date()) - tsDate(seg.start)), 0); }
 function seedRun(S, b, segs, starter, steps) {
   b.run = newRun();
+  if (!steps.some((x) => x[0] === "pick")) {
+    const w = steps.find((x) => x[0] === "weigh");
+    if (w) { steps = [["pick", w[1], segs[0][0], w[1], w[2]], ...steps]; }
+  }
   runEvent(b, starter, "batch_started", "Started batch", null, segs[0][0]);
   steps.forEach(([key, sBy, sAt, dBy, dAt]) => {
     b.run.steps[key] = { status: dAt ? "done" : "active", startedBy: sBy, startedAt: sAt, doneBy: dBy || null, doneAt: dAt || null };
@@ -456,6 +470,16 @@ function seedRun(S, b, segs, starter, steps) {
       Object.assign(b.run.steps[key], { reviewBy: sBy, reviewAt: dAt, doneBy: verifier, doneAt: vAt, verifiedBy: verifier });
       runEvent(b, sBy, "review_requested", `Marked ${stepTitle(key)} ready for review`, key, dAt);
       runEvent(b, verifier, "verified", `Verified ${stepTitle(key)}`, key, vAt);
+    } else if (key === "pick" && dAt) {
+      /* Seeded pick list: every item gathered, with a lot and expiration. */
+      b.run.pick = {};
+      const span = (tsDate(dAt) - tsDate(sAt)) / (b.lines.length + 1);
+      b.lines.forEach((l, i) => {
+        const at = shiftIso(sAt, span * (i + 1));
+        b.run.pick[l.id] = { got: true, lot: `${(by(S.components, l.compId)?.name || "X").replace(/[^A-Z]/gi, "").slice(0, 3).toUpperCase()}${240100 + ((i * 7919) % 899)}`, exp: addDays(sAt.slice(0, 10), 180 + ((i * 53) % 400)), by: sBy, at };
+      });
+      runEvent(b, sBy, "pick_done", `Gathered all ${b.lines.length} pick list items`, key, dAt);
+      runEvent(b, dBy, "step_completed", `Completed ${stepTitle(key)}`, key, dAt);
     } else if (key === "mix") {
       /* Seeded mixing: finished steps carry who checked them and the timer's recorded time. */
       b.run.mix = {};
@@ -465,7 +489,7 @@ function seedRun(S, b, segs, starter, steps) {
       steps.slice(0, upto).forEach((x) => {
         const ms = x.minutes ? x.minutes * 60000 + 20000 : 3 * 60000;
         t = shiftIso(t, ms);
-        b.run.mix[x.id] = { done: true, by: sBy, at: t, timer: x.minutes ? { accum: ms - 20000 + 12000, start: null } : null };
+        b.run.mix[x.id] = { done: true, by: sBy, at: t, timer: x.minutes ? { accum: ms - 20000 + 12000, start: null } : null, equip: guessMixEquip(x) };
         runEvent(b, sBy, "mix_step_done", `Mixing step ${steps.indexOf(x) + 1} done${x.minutes ? ` (${fmtDur(ms - 8000).slice(3)} timed)` : ""}`, key, t);
       });
       if (dAt) runEvent(b, dBy, "step_completed", `Completed ${stepTitle(key)}`, key, dAt);
@@ -477,6 +501,16 @@ function seedRun(S, b, segs, starter, steps) {
     if (end) runEvent(b, starter, "paused", "Paused batch", null, end);
   });
   b.run.events.sort((x, y) => x.at.localeCompare(y.at));
+}
+function guessMixEquip(x) {
+  const d = `${x.text} ${x.detail || ""}`.toLowerCase();
+  if (d.includes("hot plate")) return ["me1"];
+  if (d.includes("magnetic") || d.includes("stir")) return ["me2"];
+  if (d.includes("electronic mortar") || d.includes("speed 6")) return ["me3"];
+  if (d.includes("mill")) return ["me4"];
+  if (d.includes("v-blender")) return ["me5"];
+  if (d.includes("mortar")) return ["me6"];
+  return [];
 }
 function shiftIso(isoStr, ms) { const d = new Date(tsDate(isoStr).getTime() + ms); return `${iso(d)}T${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`; }
 
@@ -499,6 +533,31 @@ function measureState(S, b, l) {
   const ok = has && Number(m.actual) >= lo - 1e-9 && Number(m.actual) <= hi + 1e-9;
   return { comp, m, tol, target, lo, hi, has, pct, ok, kind: devKind(comp?.unit), dev: by(S.devices, m.deviceId) };
 }
+/* ---------------------------- Pick list module ----------------------- */
+const pickRec = (b, l) => ((b.run.pick ||= {})[l.id] ||= { got: false, lot: "", exp: "" });
+function pickModule(b, st, locked) {
+  const editable = st.status === "active" && !locked;
+  const groups = S.types.map((t) => ({ ...t, items: b.lines.filter((l) => by(S.components, l.compId)?.type === t.id) })).filter((g) => g.items.length);
+  const all = b.lines.filter((l) => by(S.components, l.compId));
+  const got = all.filter((l) => b.run.pick?.[l.id]?.got).length;
+  const row = (l) => {
+    const comp = by(S.components, l.compId); const p = priceOf(S, comp, l.mfr); const m = comp.mfrs.find((x) => x.name === p.mfr); const r = pickRec(b, l);
+    const lotInput = (k, ph, type = "text") => `<input id="pk-${k}-${l.id}" data-a-change="pickField" data-id="${b.id}" data-line="${l.id}" data-k="${k}" type="${type}" value="${esc(r[k] || "")}" placeholder="${ph}" class="h-8 w-full min-w-0 rounded-lg border border-stone-300 bg-white px-2 font-mono text-xs shadow-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20" ${editable && !r.got ? "" : "disabled"}>`;
+    return `<tr class="${r.got ? "bg-emerald-50/40" : ""}">
+      <td class="${tdClass}"><div class="flex items-center gap-1.5"><span class="font-medium ${r.got ? "text-stone-500" : "text-stone-900"}">${esc(comp.name)}</span>${comp.isApi ? Badge("API", "violet", "px-1.5 py-0 text-[10px]") : ""}</div><div class="mt-0.5 text-[11px] text-stone-500">${esc(p.mfr ?? "")}${m?.ndc ? ` · <span class="font-mono">${esc(m.ndc)}</span>` : ""}</div></td>
+      <td class="${tdClass} whitespace-nowrap text-right font-mono font-semibold text-stone-900">${fq(l.qty)} ${esc(comp.unit)}</td>
+      <td class="${tdClass} w-36">${lotInput("lot", "Lot #")}</td>
+      <td class="${tdClass} w-40">${lotInput("exp", "", "date")}</td>
+      <td class="${tdClass} text-right"><div class="inline-flex items-center gap-2">${r.got ? `<span class="text-right text-[11px] leading-tight text-stone-500">${esc(person(r.by).name.split(",")[0])}<br>${ftime(r.at)}</span>` : ""}
+        <button data-a="${r.got ? "pickUndo" : "pickGot"}" data-id="${b.id}" data-line="${l.id}" class="inline-flex h-8 w-8 items-center justify-center rounded-full border-2 transition ${r.got ? "border-emerald-600 bg-emerald-600 text-white" : editable ? "border-emerald-600 text-emerald-700 hover:bg-emerald-600 hover:text-white" : "border-stone-200 text-stone-300"}" ${editable ? `title="${r.got ? "Uncheck" : "Gathered"}"` : "disabled"}>${icon("check", "h-4 w-4")}</button></div></td></tr>`;
+  };
+  const body = groups.map((g) => `<tr class="bg-stone-50/80"><td colspan="5" class="px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-stone-500">${esc(g.title)} · ${g.items.length}</td></tr>${g.items.map(row).join("")}`).join("");
+  const footer = st.status === "active" ? `<div class="flex flex-wrap items-center justify-between gap-3 pt-4"><span class="text-sm text-stone-600"><span class="font-semibold text-stone-900">${got} of ${all.length}</span> items gathered</span>
+      <button data-a="stepDone" data-id="${b.id}" data-k="pick" class="${buttonClass}" ${got === all.length && !locked ? "" : 'disabled title="Gather every item first"'}>${icon("circle-check")}Mark Pick list complete</button></div>` : "";
+  return `<div class="-mx-4 overflow-x-auto sm:-mx-5"><table class="${tableClass} min-w-[780px]"><thead class="${theadClass}"><tr><th class="${thClass}">Item</th><th class="${thClass} text-right">Needed</th><th class="${thClass}">Lot #</th><th class="${thClass}">Expires</th><th class="${thClass} text-right">Gathered</th></tr></thead>
+    <tbody class="${tbodyClass}">${body || `<tr><td colspan="5" class="${tdClass} py-6 text-center text-stone-400">Nothing on this batch's recipe.</td></tr>`}</tbody></table></div>${footer}`;
+}
+
 /* ----------------------------- Mixing module ------------------------- */
 const timerMs = (t) => (t ? t.accum + (t.start ? Date.now() - tsDate(t.start).getTime() : 0) : 0);
 const mixRec = (b, x) => ((b.run.mix ||= {})[x.id] ||= { done: false, timer: x.minutes ? { accum: 0, start: null } : null });
@@ -537,6 +596,12 @@ function mixModule(b, st, locked) {
           <div class="flex flex-wrap items-center gap-2"><span class="font-mono text-xs text-stone-400">${i + 1}</span><span class="text-sm font-medium ${r.done ? "text-stone-500" : "text-stone-900"}">${esc(x.text)}</span>
             ${x.kind ? Badge(`${icon(x.kind === "heat" ? "flame" : x.kind === "rest" ? "hourglass" : "blend", "h-3 w-3")}${kindLabel[x.kind]} · ${x.minutes} min`, x.kind === "heat" ? "amber" : x.kind === "rest" ? "neutral" : "blue", "px-1.5 py-0 text-[10px]") : ""}</div>
           ${x.detail ? `<div class="mt-0.5 text-xs text-stone-500">${esc(x.detail)}</div>` : ""}
+          <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
+            ${(r.equip || []).map((eid) => `<span class="inline-flex items-center gap-1 rounded-md border border-stone-200 bg-white py-0.5 pl-1.5 pr-1 text-[11px] text-stone-700">${icon("cog", "h-3 w-3 text-stone-400")}${esc(by(S.mixEquip, eid)?.name ?? "Removed equipment")}${editable ? `<button data-a="mixEquipRemove" data-id="${b.id}" data-step="${x.id}" data-eq="${eid}" class="ml-0.5 rounded p-0.5 text-stone-400 hover:bg-stone-100 hover:text-red-600" title="Remove">${icon("x", "h-3 w-3")}</button>` : ""}</span>`).join("")}
+            ${editable ? (UI.mixEquipAdd === x.id
+              ? `<span class="inline-flex items-center gap-1"><select id="mxe-${x.id}" data-a-change="mixEquipAdd" data-id="${b.id}" data-step="${x.id}" class="h-7 rounded-md border border-stone-300 bg-white pl-2 text-xs text-stone-700 shadow-sm"><option value="">Select equipment</option>${S.mixEquip.filter((e) => !(r.equip || []).includes(e.id)).map((e) => opt(e.id, e.name, "")).join("")}</select><button data-a="mixEquipCancel" class="rounded p-1 text-stone-400 hover:bg-stone-100 hover:text-stone-700" title="Cancel">${icon("x", "h-3.5 w-3.5")}</button></span>`
+              : `<button data-a="mixEquipOpen" data-id="${b.id}" data-step="${x.id}" class="inline-flex h-6 items-center gap-1 rounded-md border border-dashed border-stone-300 px-1.5 text-[11px] font-medium text-stone-500 hover:border-brand hover:text-brand" title="Add mixing equipment used">${icon("plus", "h-3 w-3")}Equipment</button>`) : ""}
+          </div>
           ${r.done ? `<div class="mt-0.5 text-[11px] text-emerald-800/80">Done by ${esc(person(r.by).name)} · ${ftime(r.at)}${r.timer ? ` · timed ${fmtDur(r.timer.accum).slice(3)}` : ""}</div>` : ""}
         </div>
       </div>
@@ -870,7 +935,7 @@ function weighModule(b, st, locked) {
     const chip = x.has ? Badge(`${x.ok ? "In tolerance" : "Out of tolerance"} · ${x.pct >= 0 ? "+" : ""}${x.pct.toFixed(2)}%`, x.ok ? "green" : "red", "px-1.5 py-0 text-[10px]") : "";
     const devOpts = S.devices.filter((d) => d.kind === x.kind).map((d) => opt(d.id, `${d.tag} · ${d.name}`, x.m.deviceId || "")).join("");
     const target = `<div class="font-mono text-sm font-semibold text-stone-900">${fq(x.target)} ${unit}</div><div class="font-mono text-[11px] text-stone-500">${fq(+x.lo.toFixed(4))} – ${fq(+x.hi.toFixed(4))} · ±${x.tol}%</div>`;
-    const name = `<div class="flex items-center gap-1.5"><span class="font-medium text-stone-900">${esc(x.comp.name)}</span>${x.comp.isApi ? Badge("API", "violet", "px-1.5 py-0 text-[10px]") : ""}</div><div class="mt-0.5 text-[11px] text-stone-500">${esc(priceOf(S, x.comp, l.mfr).mfr ?? "")} · ${x.kind === "volume" ? "Measure by volume" : "Weigh"}</div>`;
+    const name = `<div class="flex items-center gap-1.5"><span class="font-medium text-stone-900">${esc(x.comp.name)}</span>${x.comp.isApi ? Badge("API", "violet", "px-1.5 py-0 text-[10px]") : ""}</div><div class="mt-0.5 text-[11px] text-stone-500">${esc(priceOf(S, x.comp, l.mfr).mfr ?? "")} · ${x.kind === "volume" ? "Measure by volume" : "Weigh"}${b.run.pick?.[l.id]?.lot ? ` · Lot <span class="font-mono">${esc(b.run.pick[l.id].lot)}</span>` : ""}</div>`;
     if (x.m.locked) {
       return `<tr class="bg-emerald-50/40">
         <td class="${tdClass}">${name}</td><td class="${tdClass}">${target}</td>
@@ -957,7 +1022,7 @@ const Avatar = (id, size = "h-6 w-6 text-[10px]") => { const p = person(id); ret
 
 /* ------------------------------ state ------------------------------- */
 /* The demo keeps its data in this browser so a reload or a closed tab doesn't lose the batch clock. */
-const STORE_KEY = "costlab-demo-v13";
+const STORE_KEY = "costlab-demo-v14";
 function saveState() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify({ S, seq, savedAt: nowIso() }, (k, v) => (k === "dataUrl" && typeof v === "string" && v.length > 300000 ? undefined : v))); } catch {}
 }
@@ -1441,9 +1506,11 @@ pages.run = () => {
     const genericBtns = closed ? "" : st.status === "todo"
       ? `<button data-a="stepStart" data-id="${b.id}" data-k="${s.key}" class="${secondaryButtonClass}" ${lockAttr}>${icon("play")}Start ${esc(s.title)}</button>`
       : st.status === "active" ? `<button data-a="stepDone" data-id="${b.id}" data-k="${s.key}" class="${buttonClass}" ${lockAttr}>${icon("circle-check")}Mark ${esc(s.title)} complete</button>`
-      : s.key === "weigh" ? "" : ["mix", "fill", "label", "qa"].includes(s.key) && st.status === "active" ? "" : `<button data-a="stepReopen" data-id="${b.id}" data-k="${s.key}" class="${secondaryButtonClass}" ${lockAttr}>${icon("undo-2")}Reopen</button>`;
+      : s.key === "weigh" ? "" : ["pick", "mix", "fill", "label", "qa"].includes(s.key) && st.status === "active" ? "" : `<button data-a="stepReopen" data-id="${b.id}" data-k="${s.key}" class="${secondaryButtonClass}" ${lockAttr}>${icon("undo-2")}Reopen</button>`;
     const qaExtra = "";
-    const body = s.key === "weigh"
+    const body = s.key === "pick"
+      ? `<p class="mb-4 text-sm text-stone-600">${esc(s.hint)}</p>${st.status === "todo" ? `<div class="flex flex-wrap gap-2">${genericBtns}</div>` : pickModule(b, st, locked || closed)}`
+      : s.key === "weigh"
       ? `<p class="mb-4 text-sm text-stone-600">${esc(s.hint)}</p>${st.status === "todo" ? `<div class="flex flex-wrap gap-2">${genericBtns}</div>` : weighModule(b, st, locked || closed)}`
       : s.key === "mix"
       ? `<p class="mb-4 text-sm text-stone-600">${esc(s.hint)}</p>${st.status === "todo" ? `<div class="flex flex-wrap gap-2">${genericBtns}</div>` : mixModule(b, st, locked || closed)}`
@@ -1476,7 +1543,7 @@ pages.run = () => {
       ${open ? `<div class="border-t border-stone-100 px-4 py-4 sm:px-5">${body}</div>` : ""}
     </section>`;
   };
-  const evIcon = { batch_started: "play", paused: "pause", resumed: "play", step_started: "circle-dot", step_completed: "circle-check", step_reopened: "undo-2", timer_started: "timer", fill_recorded: "package-check", fill_equip: "cog", quarantined: "lock", released: "lock-open", label_equip: "cog", doc_attached: "paperclip", doc_removed: "trash-2", result_pass: "badge-check", result_fail: "octagon-x", result_cleared: "undo-2", batch_failed: "octagon-x", visual_pass: "eye", visual_fail: "triangle-alert", visual_cleared: "undo-2", submission_created: "file-text", submission_edited: "pencil", requisition_printed: "printer", shipping_label: "package", tracking_recorded: "truck", labels_printed: "printer", sample_labels_printed: "printer", samples_sent: "send", fill_check: "clipboard-check", fill_check_fail: "triangle-alert", fill_check_removed: "trash-2", fill_edited: "pencil", timer_stopped: "timer-off", timer_reset: "rotate-ccw", mix_step_done: "check", mix_step_undone: "undo-2", measured: "scale", measure_cleared: "eraser", review_requested: "send", verified: "badge-check", returned: "corner-up-left", yield_recorded: "hash", batch_completed: "lock", batch_cancelled: "circle-x" };
+  const evIcon = { batch_started: "play", paused: "pause", resumed: "play", step_started: "circle-dot", step_completed: "circle-check", step_reopened: "undo-2", timer_started: "timer", fill_recorded: "package-check", fill_equip: "cog", quarantined: "lock", released: "lock-open", label_equip: "cog", pick_item: "package-check", pick_undo: "undo-2", pick_done: "clipboard-check", mix_equip: "cog", mix_equip_removed: "trash-2", doc_attached: "paperclip", doc_removed: "trash-2", result_pass: "badge-check", result_fail: "octagon-x", result_cleared: "undo-2", batch_failed: "octagon-x", visual_pass: "eye", visual_fail: "triangle-alert", visual_cleared: "undo-2", submission_created: "file-text", submission_edited: "pencil", requisition_printed: "printer", shipping_label: "package", tracking_recorded: "truck", labels_printed: "printer", sample_labels_printed: "printer", samples_sent: "send", fill_check: "clipboard-check", fill_check_fail: "triangle-alert", fill_check_removed: "trash-2", fill_edited: "pencil", timer_stopped: "timer-off", timer_reset: "rotate-ccw", mix_step_done: "check", mix_step_undone: "undo-2", measured: "scale", measure_cleared: "eraser", review_requested: "send", verified: "badge-check", returned: "corner-up-left", yield_recorded: "hash", batch_completed: "lock", batch_cancelled: "circle-x" };
   const perUser = {};
   b.run.events.forEach((e) => (perUser[e.user] = (perUser[e.user] || 0) + 1));
   return `${BackLink2("batch", b.id, "Back to batch record")}
@@ -1557,14 +1624,18 @@ function recordDoc(b) {
         ${STEPS.map((s) => { const st = run?.steps[s.key] || { status: "todo" }; return `<tr><td class="${td} font-medium text-stone-900">${esc(s.title)}</td><td class="${td}">${st.startedAt ? `${esc(person(st.startedBy).name)}<div class="text-stone-500">${fts(st.startedAt)}</div>` : '<span class="text-stone-400">—</span>'}</td><td class="${td}">${st.doneAt ? `${esc(person(st.doneBy).name)}<div class="text-stone-500">${fts(st.doneAt)}</div>` : '<span class="text-stone-400">—</span>'}</td><td class="${td} font-mono">${st.doneAt ? fmtDurShort(tsDate(st.doneAt) - tsDate(st.startedAt)) : "—"}</td></tr>`; }).join("")}
         <tr><td class="${td} font-semibold text-stone-900" colspan="3">Total batch processing time</td><td class="${td} font-mono font-semibold">${run ? fmtDur(elapsedMs(b)) : "—"}</td></tr>
       </tbody></table></div>
+      ${run?.pick ? `<h3 class="mt-6 text-xs font-semibold uppercase tracking-wider text-stone-700">Pick list</h3>
+      <div class="mt-2 overflow-x-auto"><table class="w-full min-w-[680px] text-xs text-stone-700"><thead><tr><th class="${th}">Item</th><th class="${th} text-right">Needed</th><th class="${th}">Lot #</th><th class="${th}">Expires</th><th class="${th}">Gathered by</th></tr></thead><tbody>
+        ${b.lines.map((l) => { const comp = by(S.components, l.compId); if (!comp) return ""; const r = run.pick[l.id] || {}; return `<tr><td class="${td} font-medium text-stone-900">${esc(comp.name)}</td><td class="${td} text-right font-mono">${fq(l.qty)} ${esc(comp.unit)}</td><td class="${td} font-mono">${esc(r.lot || "—")}</td><td class="${td}">${r.exp ? fd(r.exp) : "—"}</td><td class="${td}">${r.got ? `${esc(person(r.by).name)}<div class="text-stone-500">${fts(r.at)}</div>` : "—"}</td></tr>`; }).join("")}
+      </tbody></table></div>` : ""}
       ${run?.measure ? `<h3 class="mt-6 text-xs font-semibold uppercase tracking-wider text-stone-700">Ingredients measured</h3>
       <div class="mt-2 overflow-x-auto"><table class="w-full min-w-[680px] text-xs text-stone-700"><thead><tr><th class="${th}">Ingredient</th><th class="${th} text-right">Target</th><th class="${th} text-right">Tolerance</th><th class="${th} text-right">Actual</th><th class="${th}">Device</th><th class="${th}">Measured by</th></tr></thead><tbody>
         ${ingredientLines(S, b).map((l) => { const x = measureState(S, b, l); return `<tr><td class="${td} font-medium text-stone-900">${esc(x.comp.name)}</td><td class="${td} text-right font-mono">${fq(x.target)} ${esc(x.comp.unit)}</td><td class="${td} text-right font-mono">±${x.tol}%</td><td class="${td} text-right font-mono">${x.m.locked ? `${fq(x.m.actual)} ${esc(x.comp.unit)} <span class="${x.ok ? "text-emerald-700" : "text-red-600"}">(${x.pct >= 0 ? "+" : ""}${x.pct.toFixed(2)}%)</span>` : "—"}</td><td class="${td} font-mono">${esc(x.dev?.tag ?? "—")}</td><td class="${td}">${x.m.locked ? `${esc(person(x.m.by).name)}<div class="text-stone-500">${fts(x.m.at)}</div>` : "—"}</td></tr>`; }).join("")}
       </tbody></table></div>
       <p class="mt-1.5 text-xs text-stone-500">${run.steps.weigh.verifiedBy ? `Verified by ${esc(person(run.steps.weigh.verifiedBy).name)} at ${fts(run.steps.weigh.doneAt)}.` : "Not yet verified by a pharmacist."}</p>` : ""}
       ${b.mixSteps?.length ? `<h3 class="mt-6 text-xs font-semibold uppercase tracking-wider text-stone-700">Mixing</h3>
-      <div class="mt-2 overflow-x-auto"><table class="w-full min-w-[640px] text-xs text-stone-700"><thead><tr><th class="${th}">#</th><th class="${th}">Step</th><th class="${th} text-right">Set time</th><th class="${th} text-right">Timed</th><th class="${th}">Done by</th></tr></thead><tbody>
-        ${b.mixSteps.map((x, i) => { const r = run?.mix?.[x.id]; return `<tr><td class="${td} font-mono">${i + 1}</td><td class="${td}"><span class="text-stone-900">${esc(x.text)}</span>${x.detail ? `<div class="text-stone-500">${esc(x.detail)}</div>` : ""}</td><td class="${td} text-right font-mono">${x.minutes ? x.minutes + " min" : "—"}</td><td class="${td} text-right font-mono">${r?.timer && (r.timer.accum || r.timer.start) ? fmtDur(timerMs(r.timer)).slice(3) : "—"}</td><td class="${td}">${r?.done ? `${esc(person(r.by).name)}<div class="text-stone-500">${fts(r.at)}</div>` : "—"}</td></tr>`; }).join("")}
+      <div class="mt-2 overflow-x-auto"><table class="w-full min-w-[640px] text-xs text-stone-700"><thead><tr><th class="${th}">#</th><th class="${th}">Step</th><th class="${th} text-right">Set time</th><th class="${th} text-right">Timed</th><th class="${th}">Equipment</th><th class="${th}">Done by</th></tr></thead><tbody>
+        ${b.mixSteps.map((x, i) => { const r = run?.mix?.[x.id]; return `<tr><td class="${td} font-mono">${i + 1}</td><td class="${td}"><span class="text-stone-900">${esc(x.text)}</span>${x.detail ? `<div class="text-stone-500">${esc(x.detail)}</div>` : ""}</td><td class="${td} text-right font-mono">${x.minutes ? x.minutes + " min" : "—"}</td><td class="${td} text-right font-mono">${r?.timer && (r.timer.accum || r.timer.start) ? fmtDur(timerMs(r.timer)).slice(3) : "—"}</td><td class="${td}">${(r?.equip || []).map((e) => esc(by(S.mixEquip, e)?.name ?? "")).join("<br>") || "—"}</td><td class="${td}">${r?.done ? `${esc(person(r.by).name)}<div class="text-stone-500">${fts(r.at)}</div>` : "—"}</td></tr>`; }).join("")}
       </tbody></table></div>` : ""}
       ${run?.fill?.locked ? `<h3 class="mt-6 text-xs font-semibold uppercase tracking-wider text-stone-700">Bottling</h3>
       <dl class="mt-2 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">${kv("Filled with", esc(by(S.fillEquip, run.fillEquipId)?.name ?? "—"))}${kv("Expected units", c.finishedUnits)}${kv("Finished packages", run.fill.good)}${kv("Testing / QA (not dispensed)", run.fill.qa)}${kv("Dispensable", run.fill.good - run.fill.qa)}</dl>
@@ -1904,6 +1975,9 @@ pages.settings = () => {
     ${Section("Filling equipment", `<ul class="grid gap-1.5 sm:grid-cols-2">${S.fillEquip.map((e) => `<li class="flex items-center justify-between gap-2 rounded-lg border border-stone-200/80 px-3 py-2 text-sm text-stone-800"><span class="truncate">${esc(e.name)}</span><button data-a="removeEquip" data-eq="${e.id}" class="${dangerIconButtonClass}" title="Delete">${icon("trash-2", "h-3.5 w-3.5")}</button></li>`).join("")}</ul>
       <form data-f="addEquip" class="mt-3 flex max-w-md gap-2"><input id="eq-n" name="name" class="${inputClass}" placeholder="e.g. Ohaus Repeater Pump #3" required><button class="${smallButtonClass} h-9">Add</button></form>
       <p class="mt-2 text-xs text-stone-500">The machines or methods offered as "Filled with" in the Bottling step. In-process checks are verified on the scales and measuring devices above.</p>`, "mt-4")}
+    ${Section("Mixing equipment", `<ul class="grid gap-1.5 sm:grid-cols-2">${S.mixEquip.map((e) => `<li class="flex items-center justify-between gap-2 rounded-lg border border-stone-200/80 px-3 py-2 text-sm text-stone-800"><span class="truncate">${esc(e.name)}</span><button data-a="removeMixEquip" data-eq="${e.id}" class="${dangerIconButtonClass}" title="Delete">${icon("trash-2", "h-3.5 w-3.5")}</button></li>`).join("")}</ul>
+      <form data-f="addMixEquip" class="mt-3 flex max-w-md gap-2"><input id="meq-n" name="name" class="${inputClass}" placeholder="e.g. Overhead stirrer, IKA RW 20" required><button class="${smallButtonClass} h-9">Add</button></form>
+      <p class="mt-2 text-xs text-stone-500">Offered on each step in the Mixing section (+ Equipment).</p>`, "mt-4")}
     ${Section("Labeling equipment", `<ul class="grid gap-1.5 sm:grid-cols-2">${S.labelEquip.map((e) => `<li class="flex items-center justify-between gap-2 rounded-lg border border-stone-200/80 px-3 py-2 text-sm text-stone-800"><span class="truncate">${esc(e.name)}</span><button data-a="removeLabelEquip" data-eq="${e.id}" class="${dangerIconButtonClass}" title="Delete">${icon("trash-2", "h-3.5 w-3.5")}</button></li>`).join("")}</ul>
       <form data-f="addLabelEquip" class="mt-3 flex max-w-md gap-2"><input id="leq-n" name="name" class="${inputClass}" placeholder="e.g. Primera AP362 #2" required><button class="${smallButtonClass} h-9">Add</button></form>
       <p class="mt-2 text-xs text-stone-500">Offered as "Labeled with" in the Labeling step.</p>`, "mt-4")}`;
@@ -2129,11 +2203,11 @@ const actions = {
     const at = nowIso();
     b.run.segments.push({ start: at, end: null });
     runEvent(b, UI.actor, "batch_started", "Started batch", null, at);
-    if (b.run.steps.weigh.status === "todo") {
-      b.run.steps.weigh = { status: "active", startedBy: UI.actor, startedAt: at };
-      runEvent(b, UI.actor, "step_started", `Started ${stepTitle("weigh")}`, "weigh", at);
+    if (b.run.steps.pick.status === "todo") {
+      b.run.steps.pick = { status: "active", startedBy: UI.actor, startedAt: at };
+      runEvent(b, UI.actor, "step_started", `Started ${stepTitle("pick")}`, "pick", at);
     }
-    UI.openSteps[b.id + "weigh"] = true;
+    UI.openSteps[b.id + "pick"] = true;
     log(`batch.started · ${b.lot} by ${person(UI.actor).name}`);
     go("run", b.id); toast("Batch started. The clock is running.");
   },
@@ -2148,6 +2222,7 @@ const actions = {
   stepStart: (el) => {
     const b = by(S.batches, el.dataset.id), k = el.dataset.k, at = nowIso();
     if (k === "label" && b.run.steps.qa.status !== "done") return toast("Labeling unlocks once QA is complete with passing lab results.");
+    if (k === "weigh" && b.run.steps.pick.status !== "done") return toast("Finish the pick list first.");
     b.run.steps[k] = { status: "active", startedBy: UI.actor, startedAt: at, doneBy: null, doneAt: null };
     runEvent(b, UI.actor, "step_started", `Started ${stepTitle(k)}`, k, at); UI.openSteps[b.id + k] = true; render();
   },
@@ -2155,11 +2230,16 @@ const actions = {
     const b = by(S.batches, el.dataset.id), k = el.dataset.k, at = nowIso();
     if (k === "qa" && qaProblems(b).length) return toast(qaProblems(b)[0]);
     if (k === "mix" && (b.mixSteps || []).some((x) => !b.run.mix?.[x.id]?.done)) return toast("Finish every mixing step first.");
+    if (k === "pick" && b.lines.some((l) => by(S.components, l.compId) && !b.run.pick?.[l.id]?.got)) return toast("Gather every item first.");
     if (k === "fill" && !b.run.fill?.locked) return toast("Record the yield first.");
     if (k === "label" && !b.run.labelEquipId) return toast("Select the labeling equipment first.");
     if (k === "label" && !labelJobs(b).length) return toast("Print the labels first.");
     Object.assign(b.run.steps[k], { status: "done", doneBy: UI.actor, doneAt: at });
     runEvent(b, UI.actor, "step_completed", `Completed ${stepTitle(k)}`, k, at);
+    if (k === "pick" && b.run.steps.weigh.status === "todo") {
+      b.run.steps.weigh = { status: "active", startedBy: UI.actor, startedAt: at };
+      runEvent(b, UI.actor, "step_started", `Started ${stepTitle("weigh")}`, "weigh", at);
+    }
     if (k === "qa" && b.status === "quarantine") { b.status = "in_progress"; b.run.releasedAt = at; runEvent(b, UI.actor, "released", "Released from quarantine: all lab results passed", "qa", at); log(`batch.released · ${b.lot}`); }
     UI.openSteps[b.id + k] = false;
     const next = STEPS.find((s) => b.run.steps[s.key].status !== "done");
@@ -2266,6 +2346,25 @@ const actions = {
     Object.assign(r, { done: true, by: UI.actor, at: nowIso() });
     runEvent(b, UI.actor, "mix_step_done", `Mixing step ${b.mixSteps.indexOf(x) + 1} done${r.timer ? ` (${fmtDur(r.timer.accum).slice(3)} timed)` : ""}`, "mix", r.at); render();
   },
+  pickGot: (el) => {
+    const b = by(S.batches, el.dataset.id); const l = lineById(b.lines, el.dataset.line); const r = pickRec(b, l); const comp = by(S.components, l.compId);
+    Object.assign(r, { got: true, by: UI.actor, at: nowIso() });
+    runEvent(b, UI.actor, "pick_item", `Gathered ${comp.name} (${fq(l.qty)} ${comp.unit})${r.lot ? `, lot ${r.lot}` : ""}${r.exp ? `, exp ${fd(r.exp)}` : ""}`, "pick", r.at);
+    render();
+  },
+  pickUndo: (el) => {
+    const b = by(S.batches, el.dataset.id); const l = lineById(b.lines, el.dataset.line); const r = pickRec(b, l);
+    Object.assign(r, { got: false, by: null, at: null });
+    runEvent(b, UI.actor, "pick_undo", `Unchecked ${by(S.components, l.compId).name} on the pick list`, "pick"); render();
+  },
+  mixEquipOpen: (el) => { UI.mixEquipAdd = el.dataset.step; render(); setTimeout(() => document.getElementById("mxe-" + el.dataset.step)?.focus(), 0); },
+  mixEquipCancel: () => { UI.mixEquipAdd = null; render(); },
+  mixEquipRemove: (el) => {
+    const b = by(S.batches, el.dataset.id); const x = b.mixSteps.find((y) => y.id === el.dataset.step); const r = mixRec(b, x);
+    r.equip = (r.equip || []).filter((e) => e !== el.dataset.eq);
+    runEvent(b, UI.actor, "mix_equip_removed", `Removed ${by(S.mixEquip, el.dataset.eq)?.name} from mixing step ${b.mixSteps.indexOf(x) + 1}`, "mix"); render();
+  },
+  removeMixEquip: (el) => { S.mixEquip = S.mixEquip.filter((x) => x.id !== el.dataset.eq); render(); },
   mixUncheck: (el) => {
     const b = by(S.batches, el.dataset.id); const x = b.mixSteps.find((y) => y.id === el.dataset.step); const r = mixRec(b, x);
     Object.assign(r, { done: false, by: null, at: null });
@@ -2359,6 +2458,13 @@ const changes = {
     Object.assign(b.run, { labelEquipId: el.value, labelEquipBy: UI.actor, labelEquipAt: at });
     runEvent(b, UI.actor, "label_equip", `Labeling equipment: ${by(S.labelEquip, el.value).name}`, "label", at); render();
   },
+  pickField: (el) => { const b = by(S.batches, el.dataset.id); pickRec(b, lineById(b.lines, el.dataset.line))[el.dataset.k] = el.value.trim(); },
+  mixEquipAdd: (el) => {
+    const b = by(S.batches, el.dataset.id); const x = b.mixSteps.find((y) => y.id === el.dataset.step); const r = mixRec(b, x);
+    if (!el.value) return;
+    r.equip = [...new Set([...(r.equip || []), el.value])]; UI.mixEquipAdd = null;
+    runEvent(b, UI.actor, "mix_equip", `Mixing step ${b.mixSteps.indexOf(x) + 1} equipment: ${by(S.mixEquip, el.value).name}`, "mix"); render();
+  },
   fillEquip: (el) => {
     const b = by(S.batches, el.dataset.id); const at = nowIso();
     Object.assign(b.run, { fillEquipId: el.value, fillEquipBy: UI.actor, fillEquipAt: at });
@@ -2450,6 +2556,7 @@ const forms = {
   },
   addVisual: (fd) => { const f = by(S.formulas, R.id); (f.visual ||= []).push({ id: uid("vi"), text: fd.get("text").trim() }); render(); },
   saveAppearance: (fd) => { by(S.formulas, R.id).appearance = fd.get("appearance").trim(); render(); toast("Appearance saved"); },
+  addMixEquip: (fd) => { S.mixEquip.push({ id: uid("me"), name: fd.get("name").trim() }); render(); toast("Equipment added"); },
   addLabelEquip: (fd) => { S.labelEquip.push({ id: uid("le"), name: fd.get("name").trim() }); render(); toast("Equipment added"); },
   addEquip: (fd) => { S.fillEquip.push({ id: uid("e"), name: fd.get("name").trim() }); render(); toast("Equipment added"); },
   visRecord: (fd, el) => {
